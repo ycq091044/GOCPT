@@ -226,7 +226,7 @@ if __name__ == '__main__':
 
     tic = time.time()
     result_pre = []
-    for i in range(20):
+    for i in range(preIter):
         A, B, C = iterationPre(A, B, C, mask_base, X[:,:,:T])
         toc = time.time()
         rec, loss, PoF = metric(A, B, C, X[:,:,:T], mask_base); result_pre.append(PoF)
@@ -279,7 +279,7 @@ if __name__ == '__main__':
     result_stream2 = result_pre.copy()
     for index, mask_item in enumerate(mask_list):
         mask_base_ = np.concatenate([mask_base_, mask_item[:, :, np.newaxis]], axis=2)
-        A_,B_,C_ = iterationStreamOnlineCPD2(X[:, :, T_:T_+1], A_, B_, C_, _A, _B, _C, 0.5)
+        A_,B_,C_ = iterationStreamOnlineCPD2(X[:, :, T_:T_+1], A_, B_, C_, _A, _B, _C, 5 / (base * K + index))
         _A, _B, _C = A_.copy(), B_.copy(), C_.copy()
         T_ += 1; toc = time.time()
         rec, loss, PoF = metric(A_, B_, C_, X[:,:,:T_], mask_base_); result_stream2.append(PoF)
@@ -303,7 +303,7 @@ if __name__ == '__main__':
     for index, mask_item in enumerate(mask_list):
         mask_base_ = np.concatenate([mask_base_, mask_item[:, :, np.newaxis]], axis=2)
         for i in range(1):
-            A_, B_, C_ = iterationCPC(mask_item, X[:,:,T_:T_+1], A_, B_, C_, A, B, C, 0.5)
+            A_, B_, C_ = iterationCPC(mask_item, X[:,:,T_:T_+1], A_, B_, C_, A, B, C, 5 / (base * K + index))
             A, B, C = A_.copy(), B_.copy(), C_.copy()
         T_ += 1; toc = time.time()
         rec, loss, PoF = metric(A, B, C, X[:,:,:T_], mask_base_); result_cpc.append(PoF)
@@ -320,8 +320,8 @@ if __name__ == '__main__':
     plt.figure(1)
     plt.plot(np.array(result_CPD), label="Oracle CPD")
     plt.plot(np.array(result_stream), label="CPD (one base tensor) + KDD16 OnlineCPD: 0.0015s/iter")
-    plt.plot(np.array(result_stream2), label="CPD (one base tensor) + Our OnlineCPD:0.0023s/iter")
-    plt.plot(np.array(result_cpc), label="CPD (one base tensor) + row-wise LS:0.008s/iter")
+    # plt.plot(np.array(result_stream2), label="CPD (one base tensor) + Our OnlineCPD:0.0023s/iter")
+    plt.plot(np.array(result_stream2), label="CPD (one base tensor) + row-wise LS:0.0023s/iter")
     plt.legend()
     plt.ylabel('PoF')
     plt.yscale('log')
