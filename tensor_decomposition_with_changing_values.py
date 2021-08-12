@@ -155,25 +155,32 @@ if __name__ == '__main__':
     Data Generation
     """
 
-    A0 = np.random.random((I, R))
-    B0 = np.random.random((J, R))
-    C0 = np.random.random((K, R))
+    # A0 = np.random.random((I, R))
+    # B0 = np.random.random((J, R))
+    # C0 = np.random.random((K, R))
 
-    X = np.einsum('ir,jr,kr->ijk',A0,B0,C0)
+    # X = np.einsum('ir,jr,kr->ijk',A0,B0,C0)
+
+    import scipy.io as IO
+    path = './exp-data/Indian_pines_corrected.mat'
+    data = IO.loadmat(path)
+    X = data['indian_pines_corrected']
+    I, J, K, R = *X.shape, 5
+
     # X = np.random.random((I,J,K))
     # X += np.random.random(X.shape) * 0.1
 
     # the initial tensor and the mask
-    amplitude, timestamp, sparsity, preIter = 1e2, 100, 0.999, 50
+    amplitude, timestamp, sparsity, preIter = 1e3, 100, 0.95, 10
     mask_list = []
     mask_tensor = []
     for i in range(timestamp):
         tmp = np.random.random(X.shape)
         mask_list.append(tmp >= sparsity)
         mask_tensor.append(np.random.random(X.shape) * amplitude)
+
     print ('finish data loading')
     print ()
-
 
     """
     Preparation for Everyone
@@ -191,6 +198,9 @@ if __name__ == '__main__':
         rec, loss, PoF = metric(A, B, C, X)
         print ('loss:{}, PoF: {}, time: {}'.format(loss, PoF, toc - tic))
         tic = time.time()
+    
+    print ('finished preparation')
+    print ()
 
     """
     Oracle CP Decomposition
@@ -198,12 +208,15 @@ if __name__ == '__main__':
 
     A_, B_, C_ = A.copy(), B.copy(), C.copy()
     X_ = X.copy()
+
+    tic_method1 = time.time()
     result_CPD = []
+    time_CPD = []
     for mask, tensor in zip(mask_list, mask_tensor):
-        X_ += mask * tensor
+        X_ = X_ + mask * tensor
         A_, B_, C_, rec = iterationCPD(X_, A_, B_, C_, reg=1e-5)
         toc = time.time()
-        rec, loss, PoF = metric(A_, B_, C_, X_); result_CPD.append(PoF)
+        rec, loss, PoF = metric(A_, B_, C_, X_); result_CPD.append(PoF); time_CPD.append(time.time() - tic_method1)
         print ('loss:{}, PoF: {}, time: {}'.format(loss, PoF, toc - tic))
         tic = time.time()
     print ('finish CPD')
@@ -217,15 +230,18 @@ if __name__ == '__main__':
 
     A_, B_, C_ = A.copy(), B.copy(), C.copy()
     X_ = X.copy()
+
+    tic_cpc = time.time()
     tic = time.time()
     result_cpc = []
+    time_cpc = []
     for mask, tensor in zip(mask_list, mask_tensor):
         for i in range(1):
-            X_ += mask * tensor
-            A_, B_, C_ = iterationCPC(A_, B_, C_, A, B, C, mask, X_, alpha = 100)
+            X_ = X_ + mask * tensor
+            A_, B_, C_ = iterationCPC(A_, B_, C_, A, B, C, mask, X_, alpha = 1)
             A, B, C = A_.copy(), B_.copy(), C_.copy()
         toc = time.time()
-        rec, loss, PoF = metric(A, B, C, X_); result_cpc.append(PoF)
+        rec, loss, PoF = metric(A, B, C, X_); result_cpc.append(PoF); time_cpc.append(time.time() - tic_cpc)
         print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc - tic))
         tic = time.time()
 
@@ -237,9 +253,11 @@ if __name__ == '__main__':
 
     import matplotlib.pyplot as plt
     plt.figure(1)
-    plt.plot(result_CPD, label="Preparation + step-by-step CPD")
-    plt.plot(result_cpc, label="Preparation + row-wise LS")
+    plt.plot(time_CPD, result_CPD, label="Initialization + step-by-step CPD")
+    plt.plot(time_cpc, result_cpc, label="Initialization + GO-CPC")
     plt.legend()
     plt.ylabel('PoF')
-    plt.xlabel('Iterations')
+    plt.xlabel('Running Time (s)')
+    # plt.title('Synthetic Data')
+    plt.title('Indian Pins')
     plt.show()

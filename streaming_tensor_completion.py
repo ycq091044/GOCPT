@@ -22,7 +22,7 @@ Note:
 """
 
 # configuration, K is the temporal mode
-I, J, K, R = 50, 50, 100, 10
+I, J, K, R = 50, 50, 200, 5
 
 def optimize(A, B):
     L = la.cholesky(A + np.eye(A.shape[1]) * 1e-8)
@@ -74,7 +74,7 @@ def iterationPre(A1, A2, A3, mask, T_, reg=1e-5):
     A3 = Optimizer(mask, [A1, A2, A3], np.einsum('ijk,ir,jr->kr',T_,A1,A2,optimize=True), 2, reg)
     return A1, A2, A3
 
-def iterationStream(mask, T, A, B, C, alpha, reg=1e-5):
+def iterationStream(mask, T, A, B, C, alpha, reg=1e-5, gamma=0.99):
     """
     input:
         - mask: I x J x K
@@ -86,14 +86,91 @@ def iterationStream(mask, T, A, B, C, alpha, reg=1e-5):
     c = Optimizer(mask[:,:,-1:], [A, B, np.random.random((1,R))], \
         np.einsum('ijk,ir,jr->kr',(T*mask)[:,:,-1:],A,B,optimize=True), 2, reg)
 
+    coeff = np.array([gamma ** i for i in range(1, mask.shape[2])])[::-1]
+
+
     eye = np.eye(R)
     # update A1, A2, A3
     rec_X = mask * T + (1-mask) * np.einsum('ir,jr,kr->ijk',A,B,np.concatenate([C, c], axis=0),optimize=True)
-    A = optimize(alpha * np.einsum('ir,im,jr,jm->rm',B,B,C,C,optimize=True) + np.einsum('ir,im,jr,jm->rm',B,B,c,c,optimize=True) + reg * eye, \
-                alpha * np.einsum('ijk,jr,kr->ri',rec_X[:,:,:-1],B,C,optimize=True) + np.einsum('ijk,jr,kr->ri',rec_X[:,:,-1:],B,c,optimize=True)).T
-    B = optimize(alpha * np.einsum('ir,im,jr,jm->rm',A,A,C,C,optimize=True) + np.einsum('ir,im,jr,jm->rm',A,A,c,c,optimize=True) + reg * eye, \
-                alpha * np.einsum('ijk,ir,kr->rj',rec_X[:,:,:-1],A,C,optimize=True) + np.einsum('ijk,ir,kr->rj',rec_X[:,:,-1:],A,c,optimize=True)).T
+    A = optimize(alpha * np.einsum('ir,im,jr,jm,j->rm',B,B,C,C,coeff,optimize=True) + np.einsum('ir,im,jr,jm->rm',B,B,c,c,optimize=True) + reg * eye, \
+                alpha * np.einsum('ijk,jr,kr,k->ri',rec_X[:,:,:-1],B,C,coeff,optimize=True) + np.einsum('ijk,jr,kr->ri',rec_X[:,:,-1:],B,c,optimize=True)).T
+    B = optimize(alpha * np.einsum('ir,im,jr,jm,j->rm',A,A,C,C,coeff,optimize=True) + np.einsum('ir,im,jr,jm->rm',A,A,c,c,optimize=True) + reg * eye, \
+                alpha * np.einsum('ijk,ir,kr,k->rj',rec_X[:,:,:-1],A,C,coeff,optimize=True) + np.einsum('ijk,ir,kr->rj',rec_X[:,:,-1:],A,c,optimize=True)).T
+    # C = optimize(np.einsum('ir,im,jr,jm->rm',A,A,B,B) * coeff.sum() + reg * eye, np.einsum('ijk,ir,jr,k->rk',rec_X[:,:,:-1],A,B,coeff,optimize=True)).T
+    # A = optimize(alpha * np.einsum('ir,im,jr,jm->rm',B,B,C,C,optimize=True) + np.einsum('ir,im,jr,jm->rm',B,B,c,c,optimize=True) + reg * eye, \
+    #             alpha * np.einsum('ijk,jr,kr->ri',rec_X[:,:,:-1],B,C,optimize=True) + np.einsum('ijk,jr,kr->ri',rec_X[:,:,-1:],B,c,optimize=True)).T
+    # B = optimize(alpha * np.einsum('ir,im,jr,jm->rm',A,A,C,C,optimize=True) + np.einsum('ir,im,jr,jm->rm',A,A,c,c,optimize=True) + reg * eye, \
+    #             alpha * np.einsum('ijk,ir,kr->rj',rec_X[:,:,:-1],A,C,optimize=True) + np.einsum('ijk,ir,kr->rj',rec_X[:,:,-1:],A,c,optimize=True)).T
     C = optimize(np.einsum('ir,im,jr,jm->rm',A,A,B,B) + reg * eye, np.einsum('ijk,ir,jr->rk',rec_X[:,:,:-1],A,B,optimize=True)).T
+    C = np.concatenate([C, c], axis=0)
+
+    return A, B, C
+
+def iterationStream2(mask, T, A, B, C, alpha, reg=1e-5, gamma=0.99):
+    """
+    input:
+        - mask: I x J x K
+        - T:    I x J x K
+        - |omega * (x - Adiag(c)B.T)| + alpha * |mask * (X - [A, B, C_o])| + beta * reg
+    """
+
+    # get c
+    c = Optimizer(mask[:,:,-1:], [A, B, np.random.random((1,R))], \
+        np.einsum('ijk,ir,jr->kr',(T*mask)[:,:,-1:],A,B,optimize=True), 2, reg)
+
+    coeff = np.array([1.0 ** i for i in range(1, mask.shape[2])])[::-1]
+
+
+    eye = np.eye(R)
+    # update A1, A2, A3
+    rec_X = mask * T + (1-mask) * np.einsum('ir,jr,kr->ijk',A,B,np.concatenate([C, c], axis=0),optimize=True)
+    A = optimize(alpha * np.einsum('ir,im,jr,jm,j->rm',B,B,C,C,coeff,optimize=True) + np.einsum('ir,im,jr,jm->rm',B,B,c,c,optimize=True) + reg * eye, \
+                alpha * np.einsum('ijk,jr,kr,k->ri',rec_X[:,:,:-1],B,C,coeff,optimize=True) + np.einsum('ijk,jr,kr->ri',rec_X[:,:,-1:],B,c,optimize=True)).T
+    B = optimize(alpha * np.einsum('ir,im,jr,jm,j->rm',A,A,C,C,coeff,optimize=True) + np.einsum('ir,im,jr,jm->rm',A,A,c,c,optimize=True) + reg * eye, \
+                alpha * np.einsum('ijk,ir,kr,k->rj',rec_X[:,:,:-1],A,C,coeff,optimize=True) + np.einsum('ijk,ir,kr->rj',rec_X[:,:,-1:],A,c,optimize=True)).T
+    # C = optimize(np.einsum('ir,im,jr,jm->rm',A,A,B,B) * coeff.sum() + reg * eye, np.einsum('ijk,ir,jr,k->rk',rec_X[:,:,:-1],A,B,coeff,optimize=True)).T
+    # A = optimize(alpha * np.einsum('ir,im,jr,jm->rm',B,B,C,C,optimize=True) + np.einsum('ir,im,jr,jm->rm',B,B,c,c,optimize=True) + reg * eye, \
+    #             alpha * np.einsum('ijk,jr,kr->ri',rec_X[:,:,:-1],B,C,optimize=True) + np.einsum('ijk,jr,kr->ri',rec_X[:,:,-1:],B,c,optimize=True)).T
+    # B = optimize(alpha * np.einsum('ir,im,jr,jm->rm',A,A,C,C,optimize=True) + np.einsum('ir,im,jr,jm->rm',A,A,c,c,optimize=True) + reg * eye, \
+    #             alpha * np.einsum('ijk,ir,kr->rj',rec_X[:,:,:-1],A,C,optimize=True) + np.einsum('ijk,ir,kr->rj',rec_X[:,:,-1:],A,c,optimize=True)).T
+    C = optimize(np.einsum('ir,im,jr,jm->rm',A,A,B,B) + reg * eye, np.einsum('ijk,ir,jr->rk',rec_X[:,:,:-1],A,B,optimize=True)).T
+    C = np.concatenate([C, c], axis=0)
+
+    return A, B, C
+
+def iterationStream3(mask, T, A, B, C, alpha, reg=1e-5, index = 1):
+    """
+    input:
+        - mask: I x J x K
+        - T:    I x J x K
+        - |omega * (x - Adiag(c)B.T)| + alpha * |mask * (X - [A, B, C_o])| + beta * reg
+    """
+
+    # get c
+    c = Optimizer(mask[:,:,-1:], [A, B, np.random.random((1,R))], \
+        np.einsum('ijk,ir,jr->kr',(T*mask)[:,:,-1:],A,B,optimize=True), 2, reg)
+
+    mask_ = mask[:,:,-1:]
+    T_ = T[:,:,-1:]
+
+
+    eye = np.eye(R)
+    # update A1, A2, A3
+    rec_X = np.einsum('ir,jr,kr->ijk',A,B,c,optimize=True)
+    gradA = np.einsum('ijk,jr,kr->ir',mask_*(T_-rec_X),B,c,optimize=True)
+    gradB = np.einsum('ijk,ir,kr->jr',mask_*(T_-rec_X),A,c,optimize=True)
+    A = (1-alpha*reg/(index+1)) * A - alpha*gradA
+    B = (1-alpha*reg/(index+1)) * B - alpha*gradB
+    # A = optimize(alpha * np.einsum('ir,im,jr,jm,j->rm',B,B,C,C,coeff,optimize=True) + np.einsum('ir,im,jr,jm->rm',B,B,c,c,optimize=True) + reg * eye, \
+    #             alpha * np.einsum('ijk,jr,kr,k->ri',rec_X[:,:,:-1],B,C,coeff,optimize=True) + np.einsum('ijk,jr,kr->ri',rec_X[:,:,-1:],B,c,optimize=True)).T
+    # B = optimize(alpha * np.einsum('ir,im,jr,jm,j->rm',A,A,C,C,coeff,optimize=True) + np.einsum('ir,im,jr,jm->rm',A,A,c,c,optimize=True) + reg * eye, \
+    #             alpha * np.einsum('ijk,ir,kr,k->rj',rec_X[:,:,:-1],A,C,coeff,optimize=True) + np.einsum('ijk,ir,kr->rj',rec_X[:,:,-1:],A,c,optimize=True)).T
+    # C = optimize(np.einsum('ir,im,jr,jm->rm',A,A,B,B) * coeff.sum() + reg * eye, np.einsum('ijk,ir,jr,k->rk',rec_X[:,:,:-1],A,B,coeff,optimize=True)).T
+    # A = optimize(alpha * np.einsum('ir,im,jr,jm->rm',B,B,C,C,optimize=True) + np.einsum('ir,im,jr,jm->rm',B,B,c,c,optimize=True) + reg * eye, \
+    #             alpha * np.einsum('ijk,jr,kr->ri',rec_X[:,:,:-1],B,C,optimize=True) + np.einsum('ijk,jr,kr->ri',rec_X[:,:,-1:],B,c,optimize=True)).T
+    # B = optimize(alpha * np.einsum('ir,im,jr,jm->rm',A,A,C,C,optimize=True) + np.einsum('ir,im,jr,jm->rm',A,A,c,c,optimize=True) + reg * eye, \
+    #             alpha * np.einsum('ijk,ir,kr->rj',rec_X[:,:,:-1],A,C,optimize=True) + np.einsum('ijk,ir,kr->rj',rec_X[:,:,-1:],A,c,optimize=True)).T
+    # C = optimize(np.einsum('ir,im,jr,jm->rm',A,A,B,B) + reg * eye, np.einsum('ijk,ir,jr->rk',rec_X[:,:,:-1],A,B,optimize=True)).T
     C = np.concatenate([C, c], axis=0)
 
     return A, B, C
@@ -181,8 +258,14 @@ if __name__ == '__main__':
     X = np.einsum('ir,jr,kr->ijk',A0,B0,C0)
     # X += np.random.random(X.shape) * 0.1
 
+    # import scipy.io as IO
+    # path = './exp-data/Indian_pines_corrected.mat'
+    # data = IO.loadmat(path)
+    # X = data['indian_pines_corrected']
+    # I, J, K, R = *X.shape, 5
+
     # the initial tensor and the mask
-    base, sparsity, preIter = 0.2, 0.95, 10
+    base, sparsity, preIter = 0.1, 0.95, 10
     T = int(X.shape[2] * base)
     mask_base = np.random.random((*X.shape[:2],T)) >= sparsity
     mask_list = []
@@ -193,28 +276,28 @@ if __name__ == '__main__':
     print ()
 
 
-    """
-    Oracle CP Decomposition
-    """
+    # """
+    # Oracle CP Decomposition
+    # """
 
-    A = np.random.random((I,R))
-    B = np.random.random((J,R))
-    C = np.random.random((K,R))
+    # A = np.random.random((I,R))
+    # B = np.random.random((J,R))
+    # C = np.random.random((K,R))
 
-    tic = time.time()
-    result_CPD = []
-    for i in range(X.shape[2] - T + preIter):
-        A, B, C, rec = iterationCPD(X, A, B, C, reg=1e-5)
-        toc = time.time()
-        rec, loss, PoF = metric(A, B, C, X); result_CPD.append(PoF)
-        print ('loss:{}, PoF: {}, time: {}'.format(loss, PoF, toc - tic))
-        tic = time.time()
-    print ('finish CPD')
-    print ()
+    # tic = time.time()
+    # result_CPD = []
+    # for i in range(X.shape[2] - T + preIter):
+    #     A, B, C, rec = iterationCPD(X, A, B, C, reg=1e-5)
+    #     toc = time.time()
+    #     rec, loss, PoF = metric(A, B, C, X); result_CPD.append(PoF)
+    #     print ('loss:{}, PoF: {}, time: {}'.format(loss, PoF, toc - tic))
+    #     tic = time.time()
+    # print ('finish CPD')
+    # print ()
 
     
     """
-    Preaparation with base mask
+    Preparation with base mask
     """
 
     # initialization
@@ -222,20 +305,23 @@ if __name__ == '__main__':
     B = np.random.random((J,R))
     C = np.random.random((T,R))
 
+    tic_pre = time.time()
     tic = time.time()
     result_pre = []
+    time_pre = []
     for i in range(preIter):
         A, B, C = iterationPre(A, B, C, mask_base, X[:,:,:T])
         toc = time.time()
-        rec, loss, PoF = metric(A, B, C, X[:,:,:T], mask_base); result_pre.append(PoF)
+        rec, loss, PoF = metric(A, B, C, X[:,:,:T], mask_base); result_pre.append(PoF); time_pre.append(time.time() - tic_pre)
         print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc-tic))
         tic = time.time()
 
     print ('finish preparation')
     print ()
 
+
     """
-    Common streaming setting (Online CPD)
+    Common streaming setting (weighted)
     """
     
     A_, B_, C_ = A.copy(), B.copy(), C.copy()
@@ -243,17 +329,72 @@ if __name__ == '__main__':
     mask_base_ = mask_base.copy()
     rec = np.einsum('ir,jr,kr->ijk',A_,B_,C_)
 
+    tic_method1 = time.time()
     tic = time.time()
-    result_stream = result_pre.copy()
+    result_stream = [] #result_pre.copy()
+    time_stream = []
     for index, mask_item in enumerate(mask_list):
         mask_base_ = np.concatenate([mask_base_, mask_item[:, :, np.newaxis]], axis=2)
-        A_, B_, C_ = iterationStream(mask_base_, X[:,:,:T_+1], A_, B_, C_, alpha=1, reg=1e-5)
+        A_, B_, C_ = iterationStream(mask_base_, X[:,:,:T_+1], A_, B_, C_, alpha=1, reg=1e-5, gamma=0.99)
         T_ += 1; toc = time.time()
-        rec, loss, PoF = metric(A_, B_, C_, X[:,:,:T_], mask_base_); result_stream.append(PoF)
+        rec, loss, PoF = metric(A_, B_, C_, X[:,:,:T_], mask_base_); result_stream.append(PoF); time_stream.append(time.time() - tic_method1)
         print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc-tic))
         tic = time.time()
 
+    # time_stream = time_pre + [i+time_pre[-1] for i in time_stream]
     print ('finish streaming setting')
+    print ()
+
+
+    """
+    common streaming setting
+    """
+    
+    A_, B_, C_ = A.copy(), B.copy(), C.copy()
+    T_ = T
+    mask_base_ = mask_base.copy()
+    rec = np.einsum('ir,jr,kr->ijk',A_,B_,C_)
+
+    tic_method2 = time.time()
+    tic = time.time()
+    result_stream2 = [] #result_pre.copy()
+    time_stream2 = []
+    for index, mask_item in enumerate(mask_list):
+        mask_base_ = np.concatenate([mask_base_, mask_item[:, :, np.newaxis]], axis=2)
+        A_, B_, C_ = iterationStream2(mask_base_, X[:,:,:T_+1], A_, B_, C_, alpha=1, reg=1e-5)
+        T_ += 1; toc = time.time()
+        rec, loss, PoF = metric(A_, B_, C_, X[:,:,:T_], mask_base_); result_stream2.append(PoF); time_stream2.append(time.time() - tic_method2)
+        print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc-tic))
+        tic = time.time()
+
+    # time_stream = time_pre + [i+time_pre[-1] for i in time_stream]
+    print ('finish streaming2 setting')
+    print ()
+
+
+    """
+    Recursive Least Squares
+    """
+    
+    A_, B_, C_ = A.copy(), B.copy(), C.copy()
+    T_ = T
+    mask_base_ = mask_base.copy()
+    rec = np.einsum('ir,jr,kr->ijk',A_,B_,C_)
+
+    tic_method3 = time.time()
+    tic = time.time()
+    result_stream3 = [] #result_pre.copy()
+    time_stream3 = []
+    for index, mask_item in enumerate(mask_list):
+        mask_base_ = np.concatenate([mask_base_, mask_item[:, :, np.newaxis]], axis=2)
+        A_, B_, C_ = iterationStream3(mask_base_, X[:,:,:T_+1], A_, B_, C_, alpha=1e-10, reg=1e-5, index=index)
+        T_ += 1; toc = time.time()
+        rec, loss, PoF = metric(A_, B_, C_, X[:,:,:T_], mask_base_); result_stream3.append(PoF); time_stream3.append(time.time() - tic_method3)
+        print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc-tic))
+        tic = time.time()
+
+    # time_stream = time_pre + [i+time_pre[-1] for i in time_stream]
+    print ('finish streaming2 setting')
     print ()
 
 
@@ -265,18 +406,21 @@ if __name__ == '__main__':
     T_ = T
     mask_base_ = mask_base.copy()
 
+    tic_cpc = time.time()
     tic = time.time()
-    result_cpc = result_pre.copy()
+    result_cpc = [] #result_pre.copy()
+    time_cpc = []
     for index, mask_item in enumerate(mask_list):
         mask_base_ = np.concatenate([mask_base_, mask_item[:, :, np.newaxis]], axis=2)
         for i in range(1):
-            A_, B_, C_ = iterationCPC(mask_item, X[:,:,T_:T_+1], A_, B_, C_, A, B, C, 1 / (base * K + index))
+            A_, B_, C_ = iterationCPC(mask_item, X[:,:,T_:T_+1], A_, B_, C_, A, B, C, 0.5 / (base * K + index))
             A, B, C = A_.copy(), B_.copy(), C_.copy()
         T_ += 1; toc = time.time()
-        rec, loss, PoF = metric(A, B, C, X[:,:,:T_], mask_base_); result_cpc.append(PoF)
+        rec, loss, PoF = metric(A, B, C, X[:,:,:T_], mask_base_); result_cpc.append(PoF); time_cpc.append(time.time() - tic_cpc)
         print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc - tic))
         tic = time.time()
 
+    # time_cpc = time_pre + [i+time_pre[-1] for i in time_cpc]
     print ('finish CPC-ALS')
 
 
@@ -285,11 +429,15 @@ if __name__ == '__main__':
     """
     import matplotlib.pyplot as plt
     plt.figure(1)
-    plt.plot(np.array(result_CPD), label="Oracle CPD")
-    plt.plot(np.array(result_stream), label="EM CPD (on base tensor) + EM CPD (grow): 0.02~0.04s/iter")
-    plt.plot(np.array(result_cpc), label="EM CPD (on base tensor) + row-wise LS (grow): 0.01s/iter")
+    plt.rcParams.update({"font.size":12})
+    plt.plot(np.array(time_stream), np.array(result_stream), label="Initialization + EM-ALS (exponential decay)")
+    plt.plot(np.array(time_stream2), np.array(result_stream2), label="Initialization + EM-ALS")
+    plt.plot(np.array(time_stream3), np.array(result_stream3), label="Initialization + Recursive Least Square")
+    plt.plot(np.array(time_cpc), np.array(result_cpc), label="Initialization + GO-CPC")
     plt.legend()
     plt.ylabel('PoF')
     plt.yscale('log')
-    plt.xlabel('Iterations')
+    plt.xlabel('Running Time (s)')
+    plt.title('Synthetic Data')
+    plt.tight_layout()
     plt.show()

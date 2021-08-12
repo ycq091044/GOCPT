@@ -234,16 +234,19 @@ if __name__ == '__main__':
     """
 
     import pickle 
-    path = 'iqvia_tensor_data_state_2018.pickle'
+    path = './exp-data/iqvia_tensor_data_state_2018.pickle'
     data = pickle.load(open(path, 'rb'))
+    """
+    state x disease x week x update
+    """
     X = np.concatenate([data[0], data[1]], axis=2) # 49 x 22 x 52 x 12
 
     I, J, K, L = X.shape
-    R = 10
+    R = 5
     # X += np.random.random(X.shape) * 0.1
 
     # the initial tensor and the mask
-    base, preIter = 0.5, 20
+    base, preIter = 0.25, 20
     T = int(X.shape[2] * base) # should be larger than L
     mask_base = np.ones((I,J,T,L))
     for i in range(1,L):
@@ -258,25 +261,25 @@ if __name__ == '__main__':
     mask_list = mask_list[1:]
 
 
-    """
-    Oracle CP Decomposition
-    """
+    # """
+    # Oracle CP Decomposition
+    # """
 
-    A = np.random.random((I,R))
-    B = np.random.random((J,R))
-    C = np.random.random((K,R))
-    D = np.random.random((L,R))
+    # A = np.random.random((I,R))
+    # B = np.random.random((J,R))
+    # C = np.random.random((K,R))
+    # D = np.random.random((L,R))
 
-    tic = time.time()
-    result_CPD = []
-    for i in range(X.shape[2] - T + preIter):
-        A, B, C, D, rec = iterationCPD(X, A, B, C, D, reg=1e-5)
-        toc = time.time()
-        rec, loss, PoF = metric(A, B, C, D, X); result_CPD.append(PoF)
-        print ('loss:{}, PoF: {}, time: {}'.format(loss, PoF, toc - tic))
-        tic = time.time()
-    print ('finish CPD')
-    print ()
+    # tic = time.time()
+    # result_CPD = []
+    # for i in range(X.shape[2] - T + preIter):
+    #     A, B, C, D, rec = iterationCPD(X, A, B, C, D, reg=1e-5)
+    #     toc = time.time()
+    #     rec, loss, PoF = metric(A, B, C, D, X); result_CPD.append(PoF)
+    #     print ('loss:{}, PoF: {}, time: {}'.format(loss, PoF, toc - tic))
+    #     tic = time.time()
+    # print ('finish CPD')
+    # print ()
 
     
     """
@@ -289,13 +292,15 @@ if __name__ == '__main__':
     C = np.random.randn(T,R)
     D = np.random.randn(L,R)
 
+    tic_pre = time.time()
     tic = time.time()
     result_pre = []
+    time_pre = []
     # mask_base = np.ones(X[:,:,:T].shape)
     for i in range(preIter):
         A, B, C, D = iterationPre2(A, B, C, D, mask_base, X[:,:,:T,:])
         toc = time.time()
-        rec, loss, PoF = metric(A, B, C, D, X[:,:,:T,:], mask_base); result_pre.append(PoF)
+        rec, loss, PoF = metric(A, B, C, D, X[:,:,:T,:], mask_base); result_pre.append(PoF); time_pre.append(time.time() - tic_pre)
         print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc-tic))
         tic = time.time()
 
@@ -310,15 +315,18 @@ if __name__ == '__main__':
     T_ = T
     rec = np.einsum('ir,jr,kr,lr->ijkl',A_,B_,C_,D_)
 
+    tic_method1 = time.time()
     tic = time.time()
-    result_stream = result_pre.copy()
+    result_stream = [] # result_pre.copy()
+    time_stream = []
     for index, mask_base_ in enumerate(mask_list):
         A_, B_, C_, D_ = iterationStream(mask_base_, X[:,:,:T_+1,:], A_, B_, C_, D_,alpha=1, reg=1e-5)
         T_ += 1; toc = time.time()
-        rec, loss, PoF = metric(A_, B_, C_, D_, X[:,:,:T_,:], mask_base_); result_stream.append(PoF)
+        rec, loss, PoF = metric(A_, B_, C_, D_, X[:,:,:T_,:], mask_base_); result_stream.append(PoF); time_stream.append(time.time() - tic_method1)
         print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc-tic))
         tic = time.time()
 
+    # time_stream = time_pre + [i+time_pre[-1] for i in time_stream]
     print ('finish streaming setting')
     print ()
 
@@ -330,14 +338,16 @@ if __name__ == '__main__':
     A_, B_, C_, D_ = A.copy(), B.copy(), C.copy(), D.copy()
     T_ = T
 
+    tic_cpc = time.time()
     tic = time.time()
-    result_cpc = result_pre.copy()
+    result_cpc = [] # result_pre.copy()
+    time_cpc = []
     for index, mask_base_ in enumerate(mask_list):
         for i in range(1):
             A_, B_, C_, D_ = iterationCPC(mask_base_, X[:,:,:T_+1,:], A_, B_, C_, D_, A, B, C, D, 1 / (base * K + index))
             A, B, C, D = A_.copy(), B_.copy(), C_.copy(), D_.copy()
         T_ += 1; toc = time.time()
-        rec, loss, PoF = metric(A, B, C, D, X[:,:,:T_,:], mask_base_); result_cpc.append(PoF)
+        rec, loss, PoF = metric(A, B, C, D, X[:,:,:T_,:], mask_base_); result_cpc.append(PoF); time_cpc.append(time.time() - tic_cpc)
         print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc - tic))
         tic = time.time()
 
@@ -349,11 +359,13 @@ if __name__ == '__main__':
     """
     import matplotlib.pyplot as plt
     plt.figure(1)
-    plt.plot(np.array(result_CPD), label="Oracle CPD")
-    plt.plot(np.array(result_stream), label="EM CPD (on base tensor) + EM CPD (grow)")
-    plt.plot(np.array(result_cpc), label="EM CPD (on base tensor) + row-wise LS (grow)")
+    # plt.plot(np.array(result_CPD), label="Oracle CPD")
+    plt.plot(time_stream, np.array(result_stream), label="Initialization + EM-ALS")
+    plt.plot(time_cpc, np.array(result_cpc), label="Initialization + GO-CPC")
     plt.legend()
     plt.ylabel('PoF')
-    plt.yscale('log')
-    plt.xlabel('Iterations')
+    # plt.yscale('log')
+    plt.xlabel('Running Time (s)')
+    plt.title('IQVIA Data')
+    plt.tight_layout()
     plt.show()

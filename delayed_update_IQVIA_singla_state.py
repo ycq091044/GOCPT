@@ -228,7 +228,7 @@ if __name__ == '__main__':
     """
 
     import pickle 
-    path = 'iqvia_tensor_data_state_2018.pickle'
+    path = './exp-data/iqvia_tensor_data_state_2018.pickle'
     data = pickle.load(open(path, 'rb'))
     X = np.concatenate([data[0], data[1]], axis=2) # 49 x 22 x 52 x 12
     X = np.transpose(X[0,:,:,:], (0, 2, 1))

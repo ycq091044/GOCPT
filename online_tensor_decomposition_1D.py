@@ -2,9 +2,10 @@ from typing import Awaitable
 import numpy as np
 from scipy import linalg as la
 import time
+import pickle
 
 # configuration, K is the temporal mode
-I, J, K, R = 50, 50, 100, 10
+I, J, K, R = 50, 50, 500, 5
 
 
 def optimize(A, B):
@@ -50,11 +51,12 @@ def Optimizer(Omega, A, RHS, num, reg=1e-8):
     return o
 
 def iterationPre(A1, A2, A3, mask, T_, reg=1e-5):
-    T_ = T_ * mask
+    T = T_
 
-    A1 = Optimizer(mask, [A1, A2, A3], np.einsum('ijk,jr,kr->ir',T_,A2,A3,optimize=True), 0, reg)
-    A2 = Optimizer(mask, [A1, A2, A3], np.einsum('ijk,ir,kr->jr',T_,A1,A3,optimize=True), 1, reg)
-    A3 = Optimizer(mask, [A1, A2, A3], np.einsum('ijk,ir,jr->kr',T_,A1,A2,optimize=True), 2, reg)
+    eye = np.eye(A1.shape[1])
+    A1 = optimize(np.einsum('ir,im,jr,jm->rm',A2,A2,A3,A3) + reg * eye, np.einsum('ijk,jr,kr->ri',T,A2,A3)).T
+    A2 = optimize(np.einsum('ir,im,jr,jm->rm',A1,A1,A3,A3) + reg * eye, np.einsum('ijk,ir,kr->rj',T,A1,A3)).T
+    A3 = optimize(np.einsum('ir,im,jr,jm->rm',A1,A1,A2,A2) + reg * eye, np.einsum('ijk,ir,jr->rk',T,A1,A2)).T
     return A1, A2, A3
 
 def iterationStreamOnlineCPD(T, A, B, C, P1, P2, Q1, Q2, reg=1e-5):
@@ -183,8 +185,11 @@ if __name__ == '__main__':
     X = np.einsum('ir,jr,kr->ijk',A0,B0,C0)
     # X += np.random.randn(*X.shape) * 0.1
 
+    # X = pickle.load(open('./exp-data/FACE-3D.pkl', 'rb'))
+    # I, J, K, R = *X.shape, 5
+
     # the initial tensor and the mask
-    base, sparsity, preIter = 0.1, -0.01, 10
+    base, sparsity, preIter = 0.1, -0.01, 20
     T = int(X.shape[2] * base)
     mask_base = np.random.random((*X.shape[:2],T)) >= sparsity
     mask_list = []
@@ -195,24 +200,25 @@ if __name__ == '__main__':
     print ()
 
 
-    """
-    Oracle CP Decomposition
-    """
+    # """
+    # Oracle CP Decomposition
+    # """
 
-    A = np.random.random((I,R))
-    B = np.random.random((J,R))
-    C = np.random.random((K,R))
+    # A = np.random.random((I,R))
+    # B = np.random.random((J,R))
+    # C = np.random.random((K,R))
 
-    tic = time.time()
-    result_CPD = []
-    for i in range(X.shape[2] - T + preIter):
-        A, B, C, rec = iterationCPD(X, A, B, C, reg=1e-5)
-        toc = time.time()
-        rec, loss, PoF = metric(A, B, C, X); result_CPD.append(PoF)
-        print ('loss:{}, PoF: {}, time: {}'.format(loss, PoF, toc - tic))
-        tic = time.time()
-    print ('finish CPD')
-    print ()
+    # tic = time.time()
+    # result_CPD = []
+    # for i in range(X.shape[2] - T + preIter):
+    #     A, B, C, rec = iterationCPD(X, A, B, C, reg=1e-5)
+    #     toc = time.time()
+    #     rec, loss, PoF = metric(A, B, C, X)
+    #     if i >= preIter: result_CPD.append(PoF)
+    #     print ('loss:{}, PoF: {}, time: {}'.format(loss, PoF, toc - tic))
+    #     tic = time.time()
+    # print ('finish CPD')
+    # print ()
 
     
     """
@@ -250,17 +256,21 @@ if __name__ == '__main__':
     Q1 = np.einsum('ir,im,jr,jm->rm',B_,B_,C_,C_,optimize=True)
     Q2 = np.einsum('ir,im,jr,jm->rm',A_,A_,C_,C_,optimize=True)
 
+    tic_method1 = time.time()
     tic = time.time()
-    result_stream = result_pre.copy()
+    # result_stream = result_pre.copy()
+    result_stream = []
+    time_stream = []
     for index, mask_item in enumerate(mask_list):
         mask_base_ = np.concatenate([mask_base_, mask_item[:, :, np.newaxis]], axis=2)
         # A_, B_, C_ = iterationStream(mask_item, X[:, :, T_], A_, B_, C_, _A, _B, _C, 2)
         A_,B_,C_, P1, P2, Q1, Q2 = iterationStreamOnlineCPD(X[:, :, :T_+1], A_, B_, C_, P1, P2, Q1, Q2)
         T_ += 1; toc = time.time()
-        rec, loss, PoF = metric(A_, B_, C_, X[:,:,:T_], mask_base_); result_stream.append(PoF)
+        rec, loss, PoF = metric(A_, B_, C_, X[:,:,:T_], mask_base_); result_stream.append(PoF); time_stream.append(time.time() - tic_method1)
         print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc-tic))
         tic = time.time()
 
+    toc_method1 = time.time()
     print ('finish streaming setting')
     print ()
 
@@ -275,55 +285,64 @@ if __name__ == '__main__':
     mask_base_ = mask_base.copy()
     rec = np.einsum('ir,jr,kr->ijk',A_,B_,C_)
 
+    tic_method2 = time.time()
     tic = time.time()
-    result_stream2 = result_pre.copy()
+    # result_stream2 = result_pre.copy()
+    result_stream2 = []
+    time_stream2 = []
     for index, mask_item in enumerate(mask_list):
         mask_base_ = np.concatenate([mask_base_, mask_item[:, :, np.newaxis]], axis=2)
-        A_,B_,C_ = iterationStreamOnlineCPD2(X[:, :, T_:T_+1], A_, B_, C_, _A, _B, _C, 5 / (base * K + index))
+        A_,B_,C_ = iterationStreamOnlineCPD2(X[:, :, T_:T_+1], A_, B_, C_, _A, _B, _C, 10 / (base * K + index))
         _A, _B, _C = A_.copy(), B_.copy(), C_.copy()
         T_ += 1; toc = time.time()
-        rec, loss, PoF = metric(A_, B_, C_, X[:,:,:T_], mask_base_); result_stream2.append(PoF)
+        rec, loss, PoF = metric(A_, B_, C_, X[:,:,:T_], mask_base_); result_stream2.append(PoF); time_stream2.append(time.time() - tic_method2)
         print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc-tic))
         tic = time.time()
 
+    toc_method2 = time.time()
     print ('finish streaming setting')
     print ()
 
 
-    """
-    row-wise streaming CPC
-    """
+    # """
+    # row-wise streaming CPC
+    # """
 
-    A_, B_, C_ = A.copy(), B.copy(), C.copy()
-    T_ = T
-    mask_base_ = mask_base.copy()
+    # A_, B_, C_ = A.copy(), B.copy(), C.copy()
+    # T_ = T
+    # mask_base_ = mask_base.copy()
 
-    tic = time.time()
-    result_cpc = result_pre.copy()
-    for index, mask_item in enumerate(mask_list):
-        mask_base_ = np.concatenate([mask_base_, mask_item[:, :, np.newaxis]], axis=2)
-        for i in range(1):
-            A_, B_, C_ = iterationCPC(mask_item, X[:,:,T_:T_+1], A_, B_, C_, A, B, C, 5 / (base * K + index))
-            A, B, C = A_.copy(), B_.copy(), C_.copy()
-        T_ += 1; toc = time.time()
-        rec, loss, PoF = metric(A, B, C, X[:,:,:T_], mask_base_); result_cpc.append(PoF)
-        print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc - tic))
-        tic = time.time()
+    # tic = time.time()
+    # # result_cpc = result_pre.copy()
+    # result_cpc = []
+    # for index, mask_item in enumerate(mask_list):
+    #     mask_base_ = np.concatenate([mask_base_, mask_item[:, :, np.newaxis]], axis=2)
+    #     for i in range(1):
+    #         A_, B_, C_ = iterationCPC(mask_item, X[:,:,T_:T_+1], A_, B_, C_, A, B, C, 50 / (base * K + index))
+    #         A, B, C = A_.copy(), B_.copy(), C_.copy()
+    #     T_ += 1; toc = time.time()
+    #     rec, loss, PoF = metric(A, B, C, X[:,:,:T_], mask_base_); result_cpc.append(PoF)
+    #     print ('loss:{}, PoF:{}, time:{}'.format(loss, PoF, toc - tic))
+    #     tic = time.time()
 
-    print ('finish CPC-ALS')
-
+    # print ('finish CPC-ALS')
 
     """
     plot
     """
     import matplotlib.pyplot as plt
+    plt.rcParams.update({"font.size":12})
+
     plt.figure(1)
-    plt.plot(np.array(result_CPD), label="Oracle CPD")
-    plt.plot(np.array(result_stream), label="CPD (one base tensor) + KDD16 OnlineCPD: 0.0015s/iter")
+    # plt.plot(np.array(result_CPD), label="Oracle CPD")
+    plt.plot(np.array(time_stream), np.array(result_stream), label="Initialization + KDD16 OnlineCPD")
     # plt.plot(np.array(result_stream2), label="CPD (one base tensor) + Our OnlineCPD:0.0023s/iter")
-    plt.plot(np.array(result_stream2), label="CPD (one base tensor) + row-wise LS:0.0023s/iter")
+    plt.plot(np.array(time_stream2), np.array(result_stream2), label="Initialization + GO-CPC")
     plt.legend()
     plt.ylabel('PoF')
     plt.yscale('log')
-    plt.xlabel('Iterations')
+    plt.xlabel('Runing Time (s)')
+    plt.title('Synthetic Data')
+    # plt.title('FACE-3D Shots')
+    plt.tight_layout()
     plt.show()
