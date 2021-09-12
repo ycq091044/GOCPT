@@ -5,11 +5,10 @@ import pickle
 import scipy.io as IO
 import argparse
 from model import cpd_als_iteration, OnlineCPD, MAST, SDT, BiSVD, RLST, CPStream, CPStream2, \
-    GOCPT_factorization, GOCPTE_factorization
-from utils import metric
+    GOCPT_factorization, GOCPTE_factorization, metric
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data', type=str, default='synthetic', help="'synthetic' or 'FACE'")
+parser.add_argument('--data', type=str, default='synthetic', help="'synthetic' or 'FACE' or 'GCSS'")
 args = parser.parse_args()
 
 
@@ -157,18 +156,19 @@ if __name__ == '__main__':
         base, pre_iter, weight = 0.1, 10, 2
 
     elif args.data == 'FACE':
-        X = pickle.load(open('./exp-data/FACE-3D.pkl', 'rb'))
+        X = pickle.load(open('../exp-data/FACE-3D.pkl', 'rb'))
         I, J, K, R = *X.shape, 5
         base, pre_iter, weight = 0.1, 10, 200
         
-    elif args.google == 'google':
-        X = pickle.load(open('/srv/local/data/Tensor/tensorData/data/tensorFile/O1_google_new.pkl', 'rb'))
+    elif args.data == 'GCSS':
+        X = pickle.load(open('../exp-data/GCSS.pkl', 'rb'))
         I, J, K, R = *X.shape, 5
         base, pre_iter, weight = 0.1, 10, 200
 
     else:
         print ('Dataset is not found!')
         exit()
+
 
     # show my the size
     print (I, J, K, R)
@@ -199,7 +199,7 @@ if __name__ == '__main__':
     # # SDT
     # result_SDT, time_SDT = run_SDT(X, [A.copy(), B.copy(), C.copy()], K, T)
 
-    RLST
+    # RLST
     result_RLST, time_RLST = run_RLST(X, [A.copy(), B.copy(), C.copy()], K, T)
 
     # CPStream
@@ -212,44 +212,44 @@ if __name__ == '__main__':
     result_GOCPT, time_GOCPT = run_GOCPT_factorization(X, [A.copy(), B.copy(), C.copy()], K, T)
 
 
+
+    """
+    report
+    """
+    model_name = ['OnlineCPD', 'MAST', 'RLST', 'CPStream', 'GOCPTE', 'GOCPT']
+    RESULT = [time_onlineCPD, result_onlineCPD, time_MAST, result_MAST, time_RLST, result_RLST, time_CPStream, result_CPStream, \
+                time_GOCPTE, result_GOCPTE, time_GOCPT, result_GOCPT]
+
+    if args.data == 'synthetic':
+
+        import matplotlib.pyplot as plt
+        plt.rcParams.update({"font.size":9})
+
+        color = ['#1b9e77',
+                '#d95f02',
+                '#7570b3',
+                '#e7298a',
+                '#66a61e',
+                '#e6ab02'][::-1]
+
+        for index in range(len(RESULT) // 2):
+            if index == 2:
+                plt.plot(np.arange(len(RESULT[2*index]))[:-1], RESULT[2*index+1][1:], \
+                        label="{} (time: {:.4}s)".format(model_name[index], RESULT[2*index][-1]), color=color[-6+index])
+            else:
+                plt.plot(np.arange(len(RESULT[2*index])), RESULT[2*index+1], \
+                        label="{} (time: {:.4}s)".format(model_name[index], RESULT[2*index][-1]), color=color[-6+index])
+
+        plt.legend(loc='lower right')
+        plt.ylabel('PoF')
+        plt.yscale('log')
+        plt.xlabel('Time Step $t$')
+        plt.title('Online Tensor Factorization (synthetic)')
+        plt.tight_layout()
+        plt.show()
     
-"""
-plot
-"""
-import matplotlib.pyplot as plt
-plt.rcParams.update({"font.size":9})
-
-color = ['#1b9e77',
-        '#d95f02',
-        '#7570b3',
-        '#e7298a',
-        '#66a61e',
-        '#e6ab02'][::-1]
-
-RESULT = [time_onlineCPD, result_onlineCPD, time_MAST, result_MAST, time_RLST, result_RLST, time_CPStream, result_CPStream, \
-        time_GOCPTE, result_GOCPTE, time_GOCPT, result_GOCPT]
-
-model_name = ['OnlineCPD', 'MAST', 'RLST', 'CPStream', '$GOCPT_E$', 'GOCPT']
-
-for index in range(len(RESULT) // 2):
-    if index == 2:
-        plt.plot(np.arange(len(RESULT[2*index]))[:-1], RESULT[2*index+1][1:], \
-                 label="{} (time: {:.4}s)".format(model_name[index], RESULT[2*index][-1]), color=color[-6+index])
     else:
-        plt.plot(np.arange(len(RESULT[2*index])), RESULT[2*index+1], \
-                 label="{} (time: {:.4}s)".format(model_name[index], RESULT[2*index][-1]), color=color[-6+index])
 
-        
-plt.legend(loc='lower right')
-plt.ylabel('PoF')
-plt.yscale('log')
-plt.xlabel('Time Step $t$')
-if args.data == 'synthetic':
-    plt.title('Online Tensor Factorization (synthetic)')
-elif args.data == 'FACE':
-    plt.title('FACE-3D Shots')
-elif args.data == 'google':
-    plt.title('Google Symptom Search Data')
-plt.tight_layout()
+        for index in range(len(RESULT) // 2):
+            print ('Model: {}, Time: {}, Avg. PoF: {}'.format(model_name[index], RESULT[2*index][-1], np.mean(RESULT[2*index+1][1:])))
 
-plt.show()

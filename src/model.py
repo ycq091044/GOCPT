@@ -1,7 +1,65 @@
 import numpy as np
-from utils import optimize, Optimizer
 from scipy import linalg as la
 
+
+# common
+def optimize(A, B, reg=1e-5):
+    """
+    Least Squares Solver: Au = B
+    """
+    try:
+        L = la.cholesky(A + np.eye(A.shape[1]) * reg)
+        y = la.solve_triangular(L.T, B, lower=True)
+        u = la.solve_triangular(L, y, lower=False)
+    except:
+        u = la.solve(A + np.eye(A.shape[1]) * reg, B)
+    return u
+
+
+def Optimizer(Omega, A, RHS, num, reg=1e-5):
+    """
+    masked least square optimizer:
+        A @ u.T = Omega * RHS
+        number: which factor
+        reg: 2-norm regulizer
+    """
+    N = len(A)
+    lst_mat = []
+    T_inds = "".join([chr(ord('a')+i) for i in range(Omega.ndim)])
+    einstr=""
+    for i in range(N):
+        if i != num:
+            einstr+=chr(ord('a')+i) + 'r' + ','
+            lst_mat.append(A[i])
+            einstr+=chr(ord('a')+i) + 'z' + ','
+            lst_mat.append(A[i])
+    einstr+= T_inds + "->"+chr(ord('a')+num)+'rz'
+    lst_mat.append(Omega)
+    P = np.einsum(einstr,*lst_mat,optimize=True)
+    o = np.zeros(RHS.shape)
+    for j in range(A[num].shape[0]):
+        o[j,:] = optimize(P[j], RHS[j,:], reg=reg)
+    return o
+
+
+def metric(X, factors, mask=None):
+    if len(factors) == 3:
+        A, B, C = factors
+        rec = np.einsum('ir,jr,kr->ijk',A,B,C)
+    else:
+        A, B, C, D = factors
+        rec = np.einsum('ir,jr,kr,lr->ijkl',A,B,C,D)
+    
+    if mask is not None:
+        loss = la.norm(mask * rec - X) ** 2
+        PoF = 1 - la.norm(mask * rec - X) / la.norm(X)
+    else:
+        loss = la.norm(rec - X) ** 2
+        PoF = 1 - la.norm(rec - X) / la.norm(X) 
+    return rec, loss, PoF
+
+
+# ablation study & common 
 def sparse_strategy_iteration(X, mask, factors):
     A1, A2, A3 = factors
 
@@ -22,13 +80,13 @@ def dense_strategy_iteration(X, mask, factors):
 
 def cpd_als_iteration(X, factors):
     A1, A2, A3 = factors
-    A1 = optimize(np.einsum('ir,im,jr,jm->rm',A2,A2,A3,A3), np.einsum('ijk,jr,kr->ri',X,A2,A3)).T
-    A2 = optimize(np.einsum('ir,im,jr,jm->rm',A1,A1,A3,A3), np.einsum('ijk,ir,kr->rj',X,A1,A3)).T
-    A3 = optimize(np.einsum('ir,im,jr,jm->rm',A1,A1,A2,A2), np.einsum('ijk,ir,jr->rk',X,A1,A2)).T
+    A1 = optimize(np.einsum('ir,im,jr,jm->rm',A2,A2,A3,A3,optimize=True), np.einsum('ijk,jr,kr->ri',X,A2,A3,optimize=True)).T
+    A2 = optimize(np.einsum('ir,im,jr,jm->rm',A1,A1,A3,A3,optimize=True), np.einsum('ijk,ir,kr->rj',X,A1,A3,optimize=True)).T
+    A3 = optimize(np.einsum('ir,im,jr,jm->rm',A1,A1,A2,A2,optimize=True), np.einsum('ijk,ir,jr->rk',X,A1,A2,optimize=True)).T
     return A1, A2, A3
 
 
-# for factorization 
+# for factorization
 def OnlineCPD(X_new, factors, P, Q):
     """
     refer to Zhou et al. Accelerating Online CP Decompositions for Higher Order Tensors. KDD 2016
@@ -376,3 +434,228 @@ def RLST(T,factors,P0,Q0,R0,Z0,N,gamma):
     C1 = np.concatenate([C0, c1.T], axis=0)
 
     return A1, B1, C1, P1, Q1, R1, Z1
+
+
+# for completion
+def em_als_completion(T, mask, factors, alpha, gamma=1.0):
+    A, B, C = factors
+    _, R = A.shape
+
+    # get new row c
+    c = Optimizer(mask[:,:,-1:], [A, B, np.random.random((1,R))], \
+        np.einsum('ijk,ir,jr->kr',T[:,:,-1:],A,B,optimize=True), 2)
+
+    coeff = np.array([gamma ** i for i in range(1, mask.shape[2])])[::-1]
+
+    # update A1, A2, A3
+    rec_X = T + (1-mask) * np.einsum('ir,jr,kr->ijk',A,B,np.concatenate([C, c], axis=0),optimize=True)
+    A = optimize(alpha * np.einsum('ir,im,jr,jm,j->rm',B,B,C,C,coeff,optimize=True) + np.einsum('ir,im,jr,jm->rm',B,B,c,c,optimize=True), \
+                alpha * np.einsum('ijk,jr,kr,k->ri',rec_X[:,:,:-1],B,C,coeff,optimize=True) + np.einsum('ijk,jr,kr->ri',rec_X[:,:,-1:],B,c,optimize=True)).T
+    B = optimize(alpha * np.einsum('ir,im,jr,jm,j->rm',A,A,C,C,coeff,optimize=True) + np.einsum('ir,im,jr,jm->rm',A,A,c,c,optimize=True), \
+                alpha * np.einsum('ijk,ir,kr,k->rj',rec_X[:,:,:-1],A,C,coeff,optimize=True) + np.einsum('ijk,ir,kr->rj',rec_X[:,:,-1:],A,c,optimize=True)).T
+    C = optimize(np.einsum('ir,im,jr,jm->rm',A,A,B,B), np.einsum('ijk,ir,jr->rk',rec_X[:,:,:-1],A,B,optimize=True)).T
+    return A, B, np.concatenate([C, c], axis=0)
+
+
+def OnlineSGD(T, mask, factors, alpha, index=1, reg=1e-5):
+    A, B, C = factors
+    _, R = A.shape
+
+    # get new row c
+    c = Optimizer(mask, [A, B, np.random.random((1,R))], \
+        np.einsum('ijk,ir,jr->kr',T,A,B,optimize=True), 2)
+
+    # update A1, A2, A3
+    rec_X = np.einsum('ir,jr,kr->ijk',A,B,c,optimize=True)
+    gradA = np.einsum('ijk,jr,kr->ir',T - mask*rec_X,B,c,optimize=True)
+    gradB = np.einsum('ijk,ir,kr->jr',T - mask*rec_X,A,c,optimize=True)
+    A = (1-alpha*reg/(index+1)) * A - alpha*gradA
+    B = (1-alpha*reg/(index+1)) * B - alpha*gradB
+
+    return A, B, np.concatenate([C, c], axis=0)
+
+
+def OptimizerOLSTEC(Omega, A, R, S, RHS, num, mu, Lambda):
+    """
+    masked least square optimizer:
+        A @ u.T = Omega * RHS
+        number: which factor
+        reg: 2-norm regulizer
+    """
+    N = len(A)
+    I = np.eye(A[0].shape[1])
+    lst_mat = []
+    T_inds = "".join([chr(ord('a')+i) for i in range(Omega.ndim)])
+    einstr=""
+    for i in range(N):
+        if i != num:
+            einstr+=chr(ord('a')+i) + 'r' + ','
+            lst_mat.append(A[i])
+            einstr+=chr(ord('a')+i) + 'z' + ','
+            lst_mat.append(A[i])
+    einstr+= T_inds + "->"+chr(ord('a')+num)+'rz'
+    lst_mat.append(Omega)
+    P = np.einsum(einstr,*lst_mat,optimize=True)
+    o = np.zeros(RHS.shape)
+
+    # update R and S
+    P = Lambda * R + P + mu * (1-Lambda) * I
+    RHS = Lambda * S + RHS
+    for j in range(A[num].shape[0]):
+        o[j,:] = optimize(P[j], RHS[j,:], reg=0)
+    return o, P, RHS
+
+
+def OLSTEC(T, mask, factors, RA, RB, SA, SB, mu=1e-9, Lambda=0.88):
+    A, B, C = factors
+
+    # get new row c
+    K, R = C.shape
+    c = Optimizer(mask, [A, B, np.random.random((1,R))], \
+        np.einsum('ijk,ir,jr->kr',T,A,B,optimize=True), 2, reg=mu)
+    A, RA, SA = OptimizerOLSTEC(mask, [A, B, c], RA, SA, np.einsum('ijk,jr,kr->ir',T,B,c,optimize=True), 0, mu, Lambda)
+    B, RB, SB = OptimizerOLSTEC(mask, [A, B, c], RB, SB, np.einsum('ijk,ir,kr->jr',T,A,c,optimize=True), 1, mu, Lambda)
+    
+    return A, B, np.concatenate([C, c], axis=0), RA, RB, SA, SB
+
+
+def maskOptimizer(Omega, A, A_, RHS, num, alpha, reg=1e-5):
+    """
+    masked least square optimizer:
+        A @ u.T = Omega * RHS
+        number: which factor
+        reg: 2-norm regulizer
+
+    P is for normal left hand
+    P2 is for historical left hand
+    P3 is for historical right hand
+    """
+    
+    N = len(A_)
+    R = A[0].shape[1]
+    lst_mat, lst_mat2, lst_mat3 = [], [], [A_[num]]
+    T_inds = "".join([chr(ord('a')+i) for i in range(Omega.ndim)])
+    einstr = ""
+    for i in range(N):
+        if i != num:
+            if (i == N-1) and (len(A) == len(A_)):
+                lst_mat.append(A[-1]); lst_mat.append(A[-1])
+            else:
+                lst_mat.append(A[i]); lst_mat.append(A[i])
+            einstr+=chr(ord('a')+i) + 'r' + ','
+            lst_mat2.append(A[i]); lst_mat3.append(A_[i])
+            einstr+=chr(ord('a')+i) + 'z' + ','
+            lst_mat2.append(A[i]); lst_mat3.append(A[i])
+    einstr2 = einstr[:-1] + "->rz"
+    einstr3 = "tr," + einstr[:-1] + "->tz"
+    einstr += T_inds + "->"+chr(ord('a')+num)+'rz'
+    
+    P2 = np.einsum(einstr2,*lst_mat2,optimize=True)
+    P2 = np.einsum(einstr2,*lst_mat2,optimize=True)
+    lst_mat.append(Omega)
+
+    P = np.einsum(einstr,*lst_mat,optimize=True)
+    P3 = np.einsum(einstr3,*lst_mat3,optimize=True)
+    o = np.zeros(RHS.shape)
+
+    I = np.eye(R)
+    for j in range(A[num].shape[0]):
+        o[j,:] = np.linalg.inv(P[j] + alpha*P2 + reg*I) @ (RHS[j,:]  + alpha*P3[j,:])
+    return o
+
+
+def GOCPT_completion(T, mask, factors, alpha=1):
+    A, B, C = factors
+    _, R = A.shape
+    A1, A2, A3 = A.copy(), B.copy(), C.copy()
+
+    # get c
+    c = Optimizer(mask[:,:,-1:], [A1, A2, np.random.random((1,R))], \
+        np.einsum('ijk,ir,jr->kr',T[:,:,-1:],A,B,optimize=True), 2)
+
+    A = maskOptimizer(mask, [A, B, C, np.concatenate([C, c], axis=0)], [A1, A2, A3], \
+            np.einsum('ijk,jr,kr->ir',T,B,np.concatenate([C, c], axis=0),optimize=True), 0, alpha)
+    B = maskOptimizer(mask, [A, B, C, np.concatenate([C, c], axis=0)], [A1, A2, A3], \
+            np.einsum('ijk,ir,kr->jr',T,A,np.concatenate([C, c], axis=0),optimize=True), 1, alpha)
+    C = maskOptimizer(mask, [A, B, C, np.concatenate([C, c], axis=0)], [A1, A2, A3], \
+            np.einsum('ijk,ir,jr->kr',T[:,:,:-1],A,B,optimize=True), 2, alpha)
+    
+    return A, B, np.concatenate([C, c], axis=0)
+
+
+def GOCPTE_completion(T, mask, factors, alpha=1):
+    A, B, C = factors
+    _, R = A.shape
+    A1, A2, A3 = A.copy(), B.copy(), C.copy()
+
+    # get new row c
+    c = Optimizer(mask, [A1, A2, np.random.random((1,R))], \
+        np.einsum('ijk,ir,jr->kr',(T*mask),A,B,optimize=True), 2)
+    A = maskOptimizer(mask, [A, B, C, c], [A1, A2, A3], np.einsum('ijk,jr,kr->ir',T,B,c,optimize=True), 0, alpha)
+    B = maskOptimizer(mask, [A, B, C, c], [A1, A2, A3], np.einsum('ijk,ir,kr->jr',T,A,c,optimize=True), 1, alpha)
+    C = optimize(np.einsum('ir,im,jr,jm->rm',A,A,B,B,optimize=True), \
+                np.einsum('kr,ir,im,jr,jm->mk',A3,A1,A,A2,B,optimize=True)).T
+
+    return A, B, np.concatenate([C, c], axis=0)
+
+
+# for online tensor completion (other 1)
+def em_als_other1(T, mask, factors):
+    A1, A2, A3 = factors
+
+    rec = np.einsum('ir,jr,kr->ijk',A1,A2,A3,optimize=True)
+    T = T + (1 - mask) * rec
+
+    A1 = optimize(np.einsum('ir,im,jr,jm->rm',A2,A2,A3,A3,optimize=True), np.einsum('ijk,jr,kr->ri',T,A2,A3,optimize=True)).T
+    A2 = optimize(np.einsum('ir,im,jr,jm->rm',A1,A1,A3,A3,optimize=True), np.einsum('ijk,ir,kr->rj',T,A1,A3,optimize=True)).T
+    A3 = optimize(np.einsum('ir,im,jr,jm->rm',A1,A1,A2,A2,optimize=True), np.einsum('ijk,ir,jr->rk',T,A1,A2,optimize=True)).T
+    return A1, A2, A3
+
+
+def OnlineSGD_other1(T, mask, factors, lr=1e-3, reg=1e-5):
+    A1, A2, A3 = factors
+    rec = np.einsum('ir,jr,kr->ijk',A1,A2,A3,optimize=True)
+
+    grad1 = np.einsum('ijk,jr,kr->ir',T - mask * rec,A2,A3,optimize=True) + reg * A1
+    grad2 = np.einsum('ijk,ir,kr->jr',T - mask * rec,A1,A3,optimize=True) + reg * A2
+    grad3 = np.einsum('ijk,ir,jr->kr',T - mask * rec,A1,A2,optimize=True) + reg * A3
+    A1 -= grad1 * lr
+    A2 -= grad2 * lr
+    A3 -= grad3 * lr
+    return A1, A2, A3
+
+
+def GOCPT_other1(T, mask, factors, alpha=5e-3):
+    A1, A2, A3 = factors
+
+    A, B, C = A1.copy(), A2.copy(), A3.copy()
+    A1 = maskOptimizer(mask, [A1, A2, A3], [A, B, C], np.einsum('ijk,jr,kr->ir',T,A2,A3,optimize=True), 0, alpha)
+    A2 = maskOptimizer(mask, [A1, A2, A3], [A, B, C], np.einsum('ijk,ir,kr->jr',T,A1,A3,optimize=True), 1, alpha)
+    A3 = maskOptimizer(mask, [A1, A2, A3], [A, B, C], np.einsum('ijk,ir,jr->kr',T,A1,A2,optimize=True), 2, alpha)
+    return A1, A2, A3
+
+
+# for factorization with chaning value (other 2)
+def GOCPT_other2(T, factors, alpha=1):
+    A, B, C = factors
+    A1, A2, A3 = A.copy(), B.copy(), C.copy()
+    
+    A = optimize((1 + alpha) * np.einsum('ir,im,jr,jm->rm',B,B,C,C,optimize=True), \
+                np.einsum('ijk,jr,kr->ri',T,B,C,optimize=True) + alpha * np.einsum('kr,ir,im,jr,jm->mk',A1,A2,B,A3,C,optimize=True)).T
+    B = optimize(np.einsum('ir,im,jr,jm->rm',A,A,C,C,optimize=True) + alpha * np.einsum('ir,im,jr,jm->rm',A1,A1,A3,A3,optimize=True), \
+                np.einsum('ijk,ir,kr->rj',T,A,C,optimize=True) + alpha * np.einsum('kr,ir,im,jr,jm->mk',A2,A1,A,A3,C,optimize=True)).T
+    C = optimize(np.einsum('ir,im,jr,jm->rm',B,B,A,A,optimize=True) + alpha * np.einsum('ir,im,jr,jm->rm',A2,A2,A1,A1,optimize=True), \
+                np.einsum('ijk,ir,jr->rk',T,A,B,optimize=True) + alpha * np.einsum('kr,ir,im,jr,jm->mk',A3,A1,A,A2,B,optimize=True)).T
+    return A, B, C
+
+
+def GOCPTE_other2(T, mask, factors, alpha):
+    A, B, C = factors
+    _, R = A.shape
+    A1, A2, A3 = A.copy(), B.copy(), C.copy()
+
+    # get new row c
+    A = maskOptimizer(mask, [A, B, C], [A1, A2, A3], np.einsum('ijk,jr,kr->ir',T,B,C,optimize=True), 0, alpha)
+    B = maskOptimizer(mask, [A, B, C], [A1, A2, A3], np.einsum('ijk,ir,kr->jr',T,A,C,optimize=True), 1, alpha)
+    C = maskOptimizer(mask, [A, B, C], [A1, A2, A3], np.einsum('ijk,ir,jr->kr',T,A,B,optimize=True), 2, alpha)
+    return A, B, C

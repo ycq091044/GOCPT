@@ -2,17 +2,13 @@ import numpy as np
 from scipy import linalg as la
 import time
 import pickle
-from model import sparse_strategy_iteration, dense_strategy_iteration
-from utils import metric
+from model import sparse_strategy_iteration, dense_strategy_iteration, metric, optimize, Optimizer
 
 
 def run(X, mask, factors, total_iter, strategy):
     A, B, C = factors
 
     # setup
-    tic_start = time.time()
-    Result, Time = [], []
-
     if strategy == 'dense':
         func = dense_strategy_iteration
     elif strategy == 'sparse':
@@ -21,13 +17,15 @@ def run(X, mask, factors, total_iter, strategy):
         print ('strategy is not found!')
         exit()
 
+    tic_start = time.time()
+    Result, Time = [], []
+
     # iterations
     for _ in range(total_iter):
-        A, B, C = func(mask * X, mask, [A, B, C])
-        _, loss, PoF = metric(mask * X, [A, B, C], mask)
+        A, B, C = func(X, mask, [A, B, C])
+        _, loss, PoF = metric(X, [A, B, C], mask)
         Result.append(PoF); Time.append(time.time() - tic_start)
     return Result, Time
-
 
 if __name__ == '__main__':
 
@@ -36,12 +34,14 @@ if __name__ == '__main__':
     We store the sparsity list in "sparse_list".
     """
 
-    import matplotlib.pyplot as plt
-    plt.figure(figsize=(10,5)); plt.rcParams.update({"font.size":12})
-
+    ############## parameter settings
     sparse_list = [0.05, 0.2, 0.8, 0.95, 0.98, 0.995]
     I, J, K, R, total_iter = 100, 100, 100, 5, 100
+    ##############
 
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(10,5)); plt.rcParams.update({"font.size":12})
+    
     for index, sparsity in enumerate(sparse_list):
         plt.subplot(2,len(sparse_list)//2,index+1)
 
@@ -50,7 +50,7 @@ if __name__ == '__main__':
         result_sparse_list, result_dense_list = [], []
 
         # for each sparsity, run 5 random seends
-        for j in range(5):
+        for j in range(1):
 
             print ('start {}-{}, sparsity {}'.format(index, j, sparsity))
 
@@ -68,11 +68,11 @@ if __name__ == '__main__':
             C = np.random.random(C0.shape)
 
             # run sparse strategy
-            result_sparse, time_sparse = run(X, mask, [A, B, C], total_iter, 'sparse')
+            result_sparse, time_sparse = run(X*mask, mask, [A.copy(), B.copy(), C.copy()], total_iter, 'sparse')
             result_sparse_list.append(result_sparse); time_sparse_list.append(time_sparse)
 
             # run sense strategy
-            result_dense, time_dense = run(X, mask, [A, B, C], total_iter, 'dense')
+            result_dense, time_dense = run(X*mask, mask, [A.copy(), B.copy(), C.copy()], total_iter, 'dense')
             result_dense_list.append(result_dense); time_dense_list.append(time_dense)
 
         plt.plot(np.mean(time_sparse_list, axis=0), np.mean(result_sparse_list, axis=0), color='firebrick', label="Sparse Strategy")
