@@ -50,7 +50,7 @@ if __name__ == '__main__':
         result_sparse_list, result_dense_list = [], []
 
         # for each sparsity, run 5 random seends
-        for j in range(1):
+        for j in range(5):
 
             print ('start {}-{}, sparsity {}'.format(index, j, sparsity))
 
