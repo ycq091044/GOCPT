@@ -538,7 +538,7 @@ def maskOptimizer(Omega, A, A_, RHS, num, alpha, reg=1e-5):
     einstr = ""
     for i in range(N):
         if i != num:
-            if (i == N-1) and (len(A) == len(A_)):
+            if (i == N-1) and (len(A) != len(A_)):
                 lst_mat.append(A[-1]); lst_mat.append(A[-1])
             else:
                 lst_mat.append(A[i]); lst_mat.append(A[i])
