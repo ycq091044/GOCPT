@@ -84,7 +84,7 @@ def run_GOCPT(X, factors, mask_base, weight, interval, base, mask_list):
     result_GOCPT, time_GOCPT = [], []
     for index, mask_item in enumerate(mask_list):
         mask_base += mask_item
-        A, B, C = GOCPT_other1(X * mask_base, mask_base, [A, B, C], alpha=weight * interval / 10 / (base + index*interval))
+        A, B, C = GOCPT_other1(X * mask_base, mask_base, [A, B, C], alpha=weight * interval / 100 / (base + index*interval))
         rec, loss, PoF = metric(X * mask_base, [A, B, C], mask_base); result_GOCPT.append(PoF); time_GOCPT.append(time.time() - tic_GOCPT)
     print ('finish GOCPT')
 
@@ -102,8 +102,8 @@ if __name__ == '__main__':
         B0 = np.random.random((J, R))
         C0 = np.random.random((K, R))
         X = np.einsum('ir,jr,kr->ijk',A0,B0,C0)
-        base, interval, preIter, weight, total, lr = 0.02, 0.01, 10, 2, 1.0, 1e-5
-        # base, interval, preIter, weight, total, lr = 0.005, 0.001, 10, 0.5, 0.05, 1e-3
+        # base, interval, preIter, weight, total, lr = 0.02, 0.01, 10, 2, 1.0, 1e-5
+        base, interval, preIter, weight, total, lr = 0.005, 0.001, 10, 0.5, 0.05, 1e-3
 
     else:
         print ('Dataset is not found!')

@@ -47,7 +47,7 @@ def run_GOCPTE(X, factors, mask_tensor, mask_list):
     tic_GOCPTE = time.time()
     result_GOCPTE, time_GOCPTE = [], []
     for mask, tensor in zip(mask_list, mask_tensor):
-        A, B, C = GOCPTE_other2(X * mask, mask, [A, B, C], alpha=1)
+        A, B, C = GOCPTE_other2(X * mask, mask, [A, B, C], alpha=2)
         X = X + X * mask * tensor
         rec, loss, PoF = metric(X, [A, B, C]); result_GOCPTE.append(PoF); time_GOCPTE.append(time.time() - tic_GOCPTE)
     print ('finish GOCPTE')
@@ -62,7 +62,7 @@ def run_GOCPT(X, factors, mask_tensor, mask_list):
     result_GOCPT, time_GOCPT = [], []
     for mask, tensor in zip(mask_list, mask_tensor):
         X = X + X * mask * tensor
-        A, B, C = GOCPT_other2(X, [A, B, C], alpha=0.05)
+        A, B, C = GOCPT_other2(X, [A, B, C], alpha=0.02)
         rec, loss, PoF = metric(X, [A, B, C]); result_GOCPT.append(PoF); time_GOCPT.append(time.time() - tic_GOCPT)
     print ('finish GOCPT')
 

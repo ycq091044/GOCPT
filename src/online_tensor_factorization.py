@@ -135,7 +135,7 @@ def run_GOCPT_factorization(X, factors, K, T):
     result_GOCPT, time_GOCPT = [], []
     for index in range(K - T_):
         # call GOCPT_factorization routine
-        A, B, C = GOCPT_factorization(X[:, :, :T+1], [A, B, C], 2 / (base * K + index)); T += 1
+        A, B, C = GOCPT_factorization(X[:, :, :T+1], [A, B, C], weight / 100 / (base * K + index)); T += 1
         _, loss, PoF = metric(X[:,:,:T], [A, B, C]); result_GOCPT.append(PoF); time_GOCPT.append(time.time() - tic_GOCPT)
     print ('finish GOCPT')
 

@@ -102,7 +102,7 @@ def run_GOCPT(X, factors, K, T, weight, mask_base, mask_list):
     result_GOCPT, time_GOCPT = [], []
     for index, mask_item in enumerate(mask_list):
         mask_base = np.concatenate([mask_base, mask_item[:, :, np.newaxis]], axis=2)
-        A, B, C = GOCPT_completion(X[:,:,:T+1] * mask_base, mask_base, [A, B, C], weight / T); T += 1
+        A, B, C = GOCPT_completion(X[:,:,:T+1] * mask_base, mask_base, [A, B, C], weight / 100 / T); T += 1
         _, loss, PoF = metric(X[:,:,:T]*mask_base, [A, B, C], mask_base); result_GOCPT.append(PoF); time_GOCPT.append(time.time() - tic_GOCPT)
     print ('finish GOCPT')
 
@@ -114,7 +114,7 @@ if __name__ == '__main__':
 
     if args.data == 'synthetic':
         # configuration, K is the temporal mode
-        I, J, K, R = 50, 50, 500, 5
+        I, J, K, R = 100, 100, 500, 5
         A0 = np.random.random((I, R))
         B0 = np.random.random((J, R))
         C0 = np.random.random((K, R))
