@@ -2,7 +2,7 @@ import numpy as np
 from scipy import linalg as la
 from .utils import rec
 
-def PoF(X, factors):
+def PoF(X, factors, mask=None):
     """
     The percentage of fitness (POF) metric
     INPUT:
@@ -11,6 +11,10 @@ def PoF(X, factors):
     OUTPUT:
         - <scalar> PoF_metric: the metric, higher is better 
     """
-    Rec = rec(factors)
-    PoF_metric = 1 - la.norm(Rec - X) / la.norm(X)
+    if mask is None:
+        Rec = rec(factors)
+        PoF_metric = 1 - la.norm(Rec - X) / la.norm(X)
+    else:
+        Rec = rec(factors)
+        PoF_metric = 1 - la.norm(mask * Rec - X) / la.norm(X)
     return PoF_metric

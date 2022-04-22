@@ -2,7 +2,24 @@ import numpy as np
 from scipy import linalg as la
 import time
 
-def rec(factors):
+
+def generate_random_factors(X, R):
+    """
+    This function is to obtain the random initialization of the factors given the tensor
+    INPUT:
+        - <tensor> X: this is the input tensor of size (I1, I2, I3, ..., In)
+        - <int> R: the target rank
+    OUTPUT:
+        - <matrix> A1, A2, ..., An: the random factor matrices of size (In, R) 
+    """
+    # obtain the size of the tensor
+    In = X.shape
+    # randomly initialize each factor
+    random_factors = [np.random.random((i, R)) for i in In]
+    return random_factors
+
+
+def rec_from_factors(factors):
     """
     Using the factors to reconstruct the tensor
     INPUT:
@@ -10,14 +27,14 @@ def rec(factors):
     OUTPUT:
         - <tensor> X: the reconstructed tensor 
     """
-    ein_str = ""
+    lhs_str = ""
     for i in range(len(factors)):
         if i == len(factors) - 1:
-            ein_str += "{}r->{}".format(chr(i+97), \
+            lhs_str += "{}r->{}".format(chr(i+97), \
                         "".join([chr(j+97) for j in range(i + 1)]))
         else:
-            ein_str += "{}r,".format(chr(i+97))
-    X = np.einsum(ein_str, *factors, optimize=True)
+            lhs_str += "{}r,".format(chr(i+97))
+    X = np.einsum(lhs_str, *factors, optimize=True)
     return X
 
 
@@ -26,7 +43,7 @@ def optimize(A, B, reg=1e-6):
     The least squares solver: AX = B
     INPUT:
         - <matrix> A: the coefficient matrix (R,R)
-        - <matrix> B: the RHS matrix (R, In)
+        - <matrix> B: the rhs matrix (R, In)
     OUTPUT:
         - <matrix> X: the solution (R, In)
     """
@@ -39,6 +56,7 @@ def optimize(A, B, reg=1e-6):
     return x
 
 
+# dense strategy iteration
 def cpd_als_iteration(X, factors):
     """
     The CPD-ALS algorithm
@@ -53,47 +71,76 @@ def cpd_als_iteration(X, factors):
             - X: (I1, I2, I3)
             - factors: [A1, A2, A3] 
         INTERMEDIATE (first iteration):
-            - <string> ein_str: "ar,az,br,bz->rz"
-            - <matrix list> ein_mat: [A1, A1, A2, A2]
-            - <string> RHS_str: "abc,ar,br->rc"
-            - <matrix list> RHS_mat: [X, A1, A2]
+            - <string> lhs_str: "ar,az,br,bz->rz"
+            - <matrix list> lhs_mat: [A1, A1, A2, A2]
+            - <string> rhs_str: "abc,ar,br->rc"
+            - <matrix list> rhs_mat: [X, A1, A2]
         OUTPUT
             - factors: [A1', A2', A3']
     """
     tic = time.time()
     for i in range(len(factors)):
-        LHS, RHS = get_new_LHS_RHS_from_tensor(X, factors, i)
-        factors[i] = la.solve(LHS, RHS).T
+        lhs, rhs = get_lhs_rhs_from_tensor(X, factors, i)
+        factors[i] = optimize(lhs, rhs).T
     toc = time.time()
     return factors, toc - tic
 
 
-def get_new_LHS_RHS_from_tensor(X, factors, i):
+def get_lhs_rhs_from_tensor(X, factors, i):
     """
-    get the LHS and RHS einsum results of the i-th factor
+    get the lhs and rhs einsum results of the i-th factor
     INPUT:
         - <tensor> X: the tensor
         - <matrix list> factors: the list of current factors
         - <int> i: the indices of the target factor
     OUTPUT:
-        - <matrix> LHS: size (R,R), is the self-product of khatri-Rao product
-        - <matrix> RHS: size (R, Ii), is the MTTKRP result 
+        - <matrix> lhs: size (R,R), is the self-product of khatri-Rao product
+        - <matrix> rhs: size (R, Ii), is the MTTKRP result 
     """
-    ein_str = ""
-    ein_mat = []
-    RHS_str = "".join([chr(j+97) for j in range(len(factors))])
-    RHS_mat = [X]
+    lhs_str = ""
+    lhs_mat = []
+    rhs_str = "".join([chr(j+97) for j in range(len(factors))])
+    rhs_mat = [X]
     for j in range(len(factors)):
         if j != i:
-            ein_str += '{}r,{}z,'.format(chr(j+97), chr(j+97))
-            ein_mat.append(factors[j]); ein_mat.append(factors[j])
-            RHS_str += ',{}r'.format(chr(j+97))
-            RHS_mat.append(factors[j])
-    ein_str = ein_str[:-1] + '->rz'
-    RHS_str += '->r{}'.format(chr(i+97))
-    LHS = np.einsum(ein_str,*ein_mat,optimize=True)
-    RHS = np.einsum(RHS_str,*RHS_mat,optimize=True)
-    return LHS, RHS
+            lhs_str += '{}r,{}z,'.format(chr(j+97), chr(j+97))
+            lhs_mat.append(factors[j]); lhs_mat.append(factors[j])
+            rhs_str += ',{}r'.format(chr(j+97))
+            rhs_mat.append(factors[j])
+    lhs_str = lhs_str[:-1] + '->rz'
+    rhs_str += '->r{}'.format(chr(i+97))
+    lhs = np.einsum(lhs_str,*lhs_mat,optimize=True)
+    rhs = np.einsum(rhs_str,*rhs_mat,optimize=True)
+    return lhs, rhs
+
+
+def get_lhs_rhs_from_copy(As, factors, i):
+    """
+    get the lhs and rhs einsum results of the i-th factor from the nested copy factors
+    INPUT:
+        - <matrix list> As: the list of copied factors
+        - <matrix list> factors: the list of current factors
+        - <int> i: the indices of the target factor
+    OUTPUT:
+        - <matrix> lhs: size (R,R), is the self-product of khatri-Rao product
+        - <matrix> rhs: size (R, Ii), is the MTTKRP result 
+    """
+    lhs_str = ""
+    lhs_mat = []
+    rhs_str = "{}r".format(chr(i+97))
+    rhs_mat = [As[i]]
+    for j in range(len(factors)):
+        if j != i:
+            lhs_str += '{}r,{}z,'.format(chr(j+97), chr(j+97))
+            lhs_mat.append(factors[j]); lhs_mat.append(factors[j])
+            rhs_str += ',{}r,{}z'.format(chr(j+97), chr(j+97))
+            rhs_mat.append(As[j]); rhs_mat.append(factors[j])
+    lhs_str = lhs_str[:-1] + '->rz'
+    rhs_str += '->z{}'.format(chr(i+97))
+    
+    lhs = np.einsum(lhs_str,*lhs_mat,optimize=True)
+    rhs = np.einsum(rhs_str,*rhs_mat,optimize=True)
+    return lhs, rhs
 
 
 def OnlineCPD_update(X, factors, P, Q):
@@ -103,60 +150,30 @@ def OnlineCPD_update(X, factors, P, Q):
     INPUT:
         - <tensor> X: the given tensor slice
         - <matrix list> factors: current factor list
-        - <matrix list> P: a list of RHS for Ai
-        - <matrix list> Q: a list of LHS for Ai
+        - <matrix list> P: a list of rhs for Ai
+        - <matrix list> Q: a list of lhs for Ai
     OUTPUT:
         - <matrix list> factors: updated current factor list
-        - <matrix list> P: updated list of RHS for Ai
-        - <matrix list> Q: updated list of LHS for Ai
+        - <matrix list> P: updated list of rhs for Ai
+        - <matrix list> Q: updated list of lhs for Ai
         - <float> toc - tic: the time span
     """
     tic = time.time()
     # get the augmented part of the last factor
-    LHS, RHS = get_new_LHS_RHS_from_tensor(X, factors, len(factors) - 1)
-    aug_last_factor = la.solve(LHS, RHS).T
+    lhs, rhs = get_lhs_rhs_from_tensor(X, factors, len(factors) - 1)
+    aug_last_factor = la.solve(lhs, rhs).T
 
     new_last_factor = np.concatenate([factors[-1], aug_last_factor], axis=0)
     factors[-1] = aug_last_factor 
 
     # update P and Q
     for i in range(len(factors)-1):
-        Qn, Pn = get_new_LHS_RHS_from_tensor(X, factors, i)
+        Qn, Pn = get_lhs_rhs_from_tensor(X, factors, i)
         P[i] += Pn; Q[i] += Qn
         factors[i] = optimize(Q[i],P[i]).T 
 
     factors[-1] = new_last_factor
-    toc = time.time()
-    return factors, P, Q, toc - tic
-
-
-def get_new_LHS_RHS_from_copy(As, factors, i):
-    """
-    get the LHS and RHS einsum results of the i-th factor from the nested copy factors
-    INPUT:
-        - <matrix list> As: the list of copied factors
-        - <matrix list> factors: the list of current factors
-        - <int> i: the indices of the target factor
-    OUTPUT:
-        - <matrix> LHS: size (R,R), is the self-product of khatri-Rao product
-        - <matrix> RHS: size (R, Ii), is the MTTKRP result 
-    """
-    ein_str = ""
-    ein_mat = []
-    RHS_str = "{}r".format(chr(i+97))
-    RHS_mat = [As[i]]
-    for j in range(len(factors)):
-        if j != i:
-            ein_str += '{}r,{}z,'.format(chr(j+97), chr(j+97))
-            ein_mat.append(factors[j]); ein_mat.append(factors[j])
-            RHS_str += ',{}r,{}z'.format(chr(j+97), chr(j+97))
-            RHS_mat.append(As[j]); RHS_mat.append(factors[j])
-    ein_str = ein_str[:-1] + '->rz'
-    RHS_str += '->z{}'.format(chr(i+97))
-    
-    LHS = np.einsum(ein_str,*ein_mat,optimize=True)
-    RHS = np.einsum(RHS_str,*RHS_mat,optimize=True)
-    return LHS, RHS
+    return factors, P, Q, time.time() - tic
 
 
 def MAST_update(X, factors, alphaN, alpha=1, iters=20, phi=1.05, \
@@ -196,24 +213,24 @@ def MAST_update(X, factors, alphaN, alpha=1, iters=20, phi=1.05, \
     # preparation
     eta = eta_init
     eye = np.eye(R)
-    rec_old = rec(factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)])
+    rec_old = rec_from_factors(factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)])
 
     for _ in range(iters):
         eta = min(eta * phi, eta_max)
         # update the last factors
-        LHS, RHS = get_new_LHS_RHS_from_copy(As, factors, len(factors)-1)
-        factors[-1] = optimize(LHS + eta * eye, RHS + eta * Zs[-1][:-1,:].T + \
+        lhs, rhs = get_lhs_rhs_from_copy(As, factors, len(factors)-1)
+        factors[-1] = optimize(lhs + eta * eye, rhs + eta * Zs[-1][:-1,:].T + \
             Ys[-1][:-1,:].T, reg=0).T 
-        LHS, RHS = get_new_LHS_RHS_from_tensor(X, factors, len(factors)-1)
-        aug_last_factor = optimize(LHS + eta * eye, RHS + eta * Zs[-1][-1:,:].T + \
+        lhs, rhs = get_lhs_rhs_from_tensor(X, factors, len(factors)-1)
+        aug_last_factor = optimize(lhs + eta * eye, rhs + eta * Zs[-1][-1:,:].T + \
             Ys[-1][-1:,:].T, reg=0).T
         
         # update other factors
         for j in range(len(factors) - 1):
             # update other factors
-            LHS1, RHS1 = get_new_LHS_RHS_from_tensor(X, factors[:-1] + [aug_last_factor], j)
-            LHS2, RHS2 = get_new_LHS_RHS_from_copy(As, factors, j)
-            factors[j] = optimize(LHS1 + alpha * LHS2 + eta * eye, RHS1 + alpha * RHS2 + \
+            lhs1, rhs1 = get_lhs_rhs_from_tensor(X, factors[:-1] + [aug_last_factor], j)
+            lhs2, rhs2 = get_lhs_rhs_from_copy(As, factors, j)
+            factors[j] = optimize(lhs1 + alpha * lhs2 + eta * eye, rhs1 + alpha * rhs2 + \
                 eta * Zs[j].T + Ys[j].T, reg=0).T
         
         # update other auxiliaries for other factors
@@ -228,19 +245,19 @@ def MAST_update(X, factors, alphaN, alpha=1, iters=20, phi=1.05, \
         Zs[-1] = u @ np.diag(s * (s >= alphaN[-1] / eta)) @ vh
         Ys[-1] += eta * (Zs[-1] - np.concatenate([factors[-1], aug_last_factor], 0))
 
-        rec_new = rec(factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)])
+        rec_new = rec_from_factors(factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)])
         if la.norm(rec_old - rec_new) / la.norm(rec_old) < tol:
             break
         else:
             rec_old = rec_new
-    toc = time.time()
 
-    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], toc - tic
+    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], time.time() - tic
 
 
 # used for SDT
 def BiSVD(M, r, epsilon=1e-5, maxIter=50):
     """
+    Bi-Singular value decomposition
     input M: I x N
     output U, S, Vt of the top-r components
     """
@@ -275,7 +292,7 @@ def SWASVD(T, U, S, V, gamma):
     return U_new, S_new, V_new, E_new
 
 
-def SDT_update(T, factors, aux, gamma):
+def SDT_update(X, factors, aux, gamma):
     """
     refer to Nion et al. Adaptive Algorithms to Track the PARAFAC Decomposition of a Third-Order Tensor. TSP 2009
     also: https://github.com/thanhtbt/ROLCP/tree/main/Algorithms/PAFARAC(2009)
@@ -284,11 +301,11 @@ def SDT_update(T, factors, aux, gamma):
     tic = time.time()
     A0, B0, C0 = factors
     W0, Wi0, V0, S0, U0 = aux
-    I, J, _ = T.shape
+    I, J, _ = X.shape
     _, R = A0.shape
 
     # step 1:
-    U1, S1, V1, E1 = SWASVD(T.reshape(-1,1), U0, S0, V0, gamma)
+    U1, S1, V1, E1 = SWASVD(X.reshape(-1,1), U0, S0, V0, gamma)
     # step 2:
     Z = V1[:-1,:].T @ V0[1:, :]
     v0 = V0[:1,:]; v1 = V1[-1:,:]
@@ -306,9 +323,7 @@ def SDT_update(T, factors, aux, gamma):
         A1[:, r] = a1 / la.norm(a1)
     # step 4:
     C1 = np.concatenate([C0, c.T], axis=0)
-
-    toc = time.time()
-    return [A1, B1, C1], [W1, Wi1, V1, S1, U1], toc - tic
+    return [A1, B1, C1], [W1, Wi1, V1, S1, U1], time.time() - tic
 
 
 # used for RLST
@@ -342,7 +357,8 @@ def Pinv_update(A, P, c, d, idcase):
 
     return A, P
 
-def RLST_update(T,factors,aux,gamma):
+
+def RLST_update(X,factors,aux,gamma):
     """
     refer to Nion et al. Adaptive Algorithms to Track the PARAFAC Decomposition of a Third-Order Tensor. TSP 2009
     also: https://github.com/thanhtbt/ROLCP/tree/main/Algorithms/PAFARAC(2009)
@@ -350,9 +366,9 @@ def RLST_update(T,factors,aux,gamma):
     tic = time.time()
     A0, B0, C0 = factors
     P0,Q0,R0,Z0 = aux
-    I, J, _ = T.shape
+    I, J, _ = X.shape
     _, R = A0.shape
-    x = T.reshape(-1,1)
+    x = X.reshape(-1,1)
 
     # step 1:
     c1 = P0 @ (Z0 @ x)
@@ -377,15 +393,12 @@ def RLST_update(T,factors,aux,gamma):
         a1 = Hr1 @ B1[:, r]
         A1[:, r] = a1 / la.norm(a1)
     C1 = np.concatenate([C0, c1.T], axis=0)
-
-    toc = time.time()
-    return [A1, B1, C1], [P1, Q1, R1, Z1], toc - tic
+    return [A1, B1, C1], [P1, Q1, R1, Z1], time.time() - tic
 
 
 def CPStream_update(X, factors, G, mu=0.99, iters=20, tol=1e-5):
     """
     refer to Smith et al. Streaming Tensor Factorization for Infinite Data Sources. SDM 2018 
-    Note: X_new: I x J x 1
     """
     tic = time.time()
 
@@ -434,28 +447,218 @@ def CPStream_update(X, factors, G, mu=0.99, iters=20, tol=1e-5):
 
 
 
-def GOCPT_update(X, factors, alpha=1):
+def GOCPTE_fac_update(X, factors, alpha=1):
     """
-    Our efficient version
-    Note: X_new: I x J x 1
+    Our efficient version for online tensor factorization
+    INPUT:
+        - <tensor> X: the input new tensor slice, (..., ..., ..., 1)
+        - <matrix list> factors: the current factor matrix list
+        - <float> alpha: the weight for balancing the new and past information
+    OUTPUT:
+        - <matrix list> factors: the current factor matrix list
     """
     tic = time.time()
 
     As = [factor.copy() for factor in factors]
     
     # get the last dim
-    LHS, RHS = get_new_LHS_RHS_from_tensor(X, factors, len(factors)-1)
-    aug_last_factor = optimize(LHS, RHS).T
+    lhs, rhs = get_lhs_rhs_from_tensor(X, factors, len(factors)-1)
+    aug_last_factor = optimize(lhs, rhs).T
     
     # update other factors
     for j in range(len(factors) - 1):
-        LHS1, RHS1 = get_new_LHS_RHS_from_tensor(X, factors[:-1] + [aug_last_factor], j)
-        LHS2, RHS2 = get_new_LHS_RHS_from_copy(As, factors, j)
-        factors[j] = optimize(LHS1 + alpha * LHS2, RHS1 + alpha * RHS2).T
+        lhs1, rhs1 = get_lhs_rhs_from_tensor(X, factors[:-1] + [aug_last_factor], j)
+        lhs2, rhs2 = get_lhs_rhs_from_copy(As, factors, j)
+        factors[j] = optimize(lhs1 + alpha * lhs2, rhs1 + alpha * rhs2).T
     
     # update the last factor
-    LHS, RHS = get_new_LHS_RHS_from_copy(As, factors, len(factors)-1)
-    factors[-1] = optimize(LHS, RHS).T
+    lhs, rhs = get_lhs_rhs_from_copy(As, factors, len(factors)-1)
+    factors[-1] = optimize(lhs, rhs).T
+
+    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], axis=0)], time.time() - tic 
+
+
+# ----------- the following is for online tensor completion -----------
+
+def get_lhs_rhs_mask(Omega, mask_X, factors, i):
+    """
+    get the lhs and rhs einsum results of the i-th factor with tensor mask
+    INPUT:
+        - <tensor> Omega: the tensor mask
+        - <tensor> mask_X: the masked tensor
+        - <matrix list> factors: the list of current factors
+        - <int> i: the indices of the target factor
+    OUTPUT:
+        - <matrix> lhs: size (Ii, R, R), is the self-product of khatri-Rao product
+        - <matrix> rhs: size (R, Ii), is the MTTKRP result 
+    """
+    lhs_mat, rhs_mat = [], [mask_X]
+    lhs_str = ""
+    rhs_str = "".join([chr(j+97) for j in range(len(factors))])
+    for j in range(Omega.ndim):
+        if j != i:
+            lhs_str+='{}r,{}z,'.format(chr(97+j), chr(97+j))
+            lhs_mat.append(factors[j]); lhs_mat.append(factors[j])
+            rhs_str += ',{}r'.format(chr(j+97))
+            rhs_mat.append(factors[j])
+    lhs_str += "".join([chr(97+i) for i in range(Omega.ndim)]) + "->"+chr(97+i)+'rz'
+    rhs_str += '->r{}'.format(chr(i+97))
+    lhs_mat.append(Omega)
+    lhs_ls = np.einsum(lhs_str, *lhs_mat, optimize=True)
+    rhs = np.einsum(rhs_str, *rhs_mat, optimize=True)
+
+    return lhs_ls, rhs
+
+
+def get_lhs_rhs_mask_weighted(Omega, mask_X, factors, coeff, i):
+    """
+    get the lhs and rhs einsum results of the i-th factor with tensor mask
+    INPUT:
+        - <tensor> Omega: the tensor mask
+        - <tensor> mask_X: the masked tensor
+        - <matrix list> factors: the list of current factors
+        - <list> coeff: exponential weights (in reverse order) for each time step
+        - <int> i: the indices of the target factor
+    OUTPUT:
+        - <matrix> lhs: size (Ii, R, R), is the self-product of khatri-Rao product
+        - <matrix> rhs: size (R, Ii), is the MTTKRP result 
+    """
+    lhs_mat, rhs_mat = [], [mask_X]
+    lhs_str = ""
+    rhs_str = "".join([chr(j+97) for j in range(len(factors))])
+    for j in range(Omega.ndim):
+        if j != i:
+            lhs_str+='{}r,{}z,'.format(chr(97+j), chr(97+j))
+            lhs_mat.append(factors[j]); lhs_mat.append(factors[j])
+            rhs_str += ',{}r'.format(chr(j+97))
+            rhs_mat.append(factors[j])
+    lhs_str += "{},".format(chr(97+Omega.ndim-1)) + \
+        "".join([chr(97+i) for i in range(Omega.ndim)]) + "->"+chr(97+i)+'rz'
+    lhs_mat.append(coeff); lhs_mat.append(Omega)
+    rhs_str += ",{}".format(chr(97+Omega.ndim-1)) + "->r{}".format(chr(i+97))
+    rhs_mat.append(coeff)
+
+    lhs_ls = np.einsum(lhs_str, *lhs_mat, optimize=True)
+    rhs = np.einsum(rhs_str, *rhs_mat, optimize=True)
+
+    return lhs_ls, rhs
+
+
+# sparse strategy iteration
+def cpc_als_iteration(mask_X, factors, Omega):
+    """
+    The CPD-ALS algorithm
+    INPUT:
+        - <tensor> mask_X: this is the input tensor of size (I1, I2, ..., In)
+        - <matrix list> factors: the initalized factors (A1, A2, ..., An)
+        - <tensor> Omega: this is the tensor mask of size (I1, I2, ..., In)
+    OUTPUT:
+        - <matrix list> factors: the optimized factors (A1, A2, ..., An)
+    """
+    tic = time.time()
+    for i in range(len(factors)):
+        lhs, rhs = get_lhs_rhs_mask(Omega, mask_X, factors, i)
+        for k in range(factors[i].shape[0]):
+            factors[i][k] = optimize(lhs[k], rhs[:, k]).T
+    toc = time.time()
+    return factors, toc - tic
+
+
+def OnlineSGD_update(mask_X, mask, factors, lr, index=1, reg=1e-5):
+    """
+    This method uses stochastic gradient descent to update each factor
+    INPUT:
+        - <tensor> mask_X: this is the input tensor of size (I1, I2, ..., In)
+        - <matrix list> factors: the initalized factors (A1, A2, ..., An)
+        - <tensor> mask: this is the tensor mask of size (I1, I2, ..., In)
+        - <float> lr: the learning rate
+        - <int> index: in which step? the index will become large with charging weight
+        - <float> reg: L2 regularization coefficient
+    OUTPUT:
+        - <matrix list> factors: the optimized factors (A1, A2, ..., An)
+    """
+    tic = time.time()
+    _, R = factors[0].shape
+
+    # get new row c
+    lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
+    aug_last_factor = optimize(lhs[0], rhs[:, :1]).T
+
+    # update A1, A2, A3
+    rec_X = rec_from_factors(factors[:-1] + [aug_last_factor])
+    grad = []
+    for i in range(mask.ndim - 1):
+        lhs, rhs = get_lhs_rhs_from_tensor(mask_X - mask * rec_X, factors, i)
+        grad.append(optimize(lhs, rhs).T)
+        
+    for i in range(mask.ndim - 1):
+        factors[i] = (1 - lr * reg / (index+1)) * factors[i] - lr * grad[i]
+    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], time.time() - tic
+
+
+def OLSTEC_update(mask_X, mask, factors, R_ls, S_ls, mu=1e-9, Lambda=0.88):
+    """
+    Kasai, Online Low-Rank Tensor Subspace Tracking from Incomplete Data by CP Decomposition \
+        using Recursive Least Squares, ICASSP 2016
+    INPUT:
+        - <tensor> mask_X: this is the input tensor of size (I1, I2, ..., In)
+        - <matrix list> factors: the initalized factors (A1, A2, ..., An)
+        - <tensor> mask: this is the tensor mask of size (I1, I2, ..., In)
+        - <matrix list> R_ls: aux variables for LHS
+        - <matrix list> L_ls: aux variables for RHS
+        - <float> mu, Lambda: two coefficient
+    OUTPUT:
+        - <matrix list> factors: the optimized factors (A1, A2, ..., An)
+        - <matrix list> R_ls: aux variables for LHS
+        - <matrix list> L_ls: aux variables for RHS
+    """
+    tic = time.time()
+
+    _, R = factors[0].shape
+    eye = np.eye(R)
+
+    # obtain the aug_last_factor
+    lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
+    aug_last_factor = optimize(lhs[0], rhs[:, :1]).T
+
+    # update the other factors
+
+    for i in range(mask.ndim - 1):
+        lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors[:-1] + [aug_last_factor], i)
+        R_ls[i] = Lambda * R_ls[i] + lhs + mu * (1 - Lambda) * eye
+        S_ls[i] = Lambda * S_ls[i] + rhs
+
+        for k in range(factors[i].shape[0]):
+            factors[i][k] = optimize(R_ls[i][k], S_ls[i][:, k]).T
+    
+    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], \
+        R_ls, S_ls, time.time() - tic
+
+
+def GOCPTE_comp_update(mask_X, mask, factors, alpha=1):
+    """
+    Our efficient version for online tensor completion
+    INPUT:
+        - <tensor> X: the input new tensor slice, (..., ..., ..., 1)
+        - <matrix list> factors: the current factor matrix list
+        - <float> alpha: the weight for balancing the new and past information
+    OUTPUT:
+        - <matrix list> factors: the current factor matrix list
+    """
+    tic = time.time()
+    As = [factor.copy() for factor in factors]
+
+    # get a new row in the last factor
+    lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
+    aug_last_factor = optimize(lhs[0], rhs[:, :1]).T
+
+    for i in range(mask.ndim - 1):
+        lhs1, rhs1 = get_lhs_rhs_mask(mask, mask_X, factors[:-1] + [aug_last_factor], i)
+        lhs2, rhs2 = get_lhs_rhs_from_copy(As, factors, i)
+
+        for k in range(factors[i].shape[0]):
+            factors[i][k] = optimize(lhs1[k] + alpha * lhs2, \
+                    rhs1[:, k] + alpha * rhs2[:, k]).T
 
     toc = time.time()
-    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], axis=0)], toc - tic 
+    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], toc - tic

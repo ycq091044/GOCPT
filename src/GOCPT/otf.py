@@ -1,25 +1,10 @@
 import numpy as np
 from regex import P
-from .utils import cpd_als_iteration, OnlineCPD_update, get_new_LHS_RHS_from_tensor, \
-    MAST_update, BiSVD, SDT_update, RLST_update, CPStream_update, GOCPT_update
+from .utils import cpd_als_iteration, OnlineCPD_update, get_lhs_rhs_from_tensor, \
+        MAST_update, BiSVD, SDT_update, RLST_update, CPStream_update, GOCPTE_fac_update, \
+        generate_random_factors
 from .metrics import PoF
 from scipy import linalg as la
-
-def random_factors(X, R):
-    """
-    This function is to obtain the random initialization of the factors given the tensor
-    INPUT:
-        - <tensor> X: this is the input tensor of size (I1, I2, I3, ..., In)
-        - <int> R: the target rank
-    OUTPUT:
-        - <matrix> A1, A2, ..., An: the random factor matrices of size (In, R) 
-    """
-    # obtain the size of the tensor
-    In = X.shape
-    # randomly initialize each factor
-    random_factors = [np.random.random((i, R)) for i in In]
-    return random_factors
-
 
 def cpd(X, R, iters=None, verbose=False):
     """
@@ -33,7 +18,7 @@ def cpd(X, R, iters=None, verbose=False):
         - <list> pof_score_list: contains the PoF metric during iterations 
     """
      
-    factors = random_factors(X, R)
+    factors = generate_random_factors(X, R)
     pof_score_list = []
 
     if iters is not None:
@@ -68,8 +53,8 @@ def draw_pof(pof_score):
     plt.show()
 
 
-class BASE_TENSOR_FAC:
-    def __init__(self, base_X, R):
+class BASE_ONLINE_TENSOR_FAC:
+    def __init__(self, base_X, R, iters=50):
         self.factors = None
         self.N = None
         self.R = R
@@ -77,15 +62,15 @@ class BASE_TENSOR_FAC:
         self.pof_update_list = []
         self.counter = 0
 
-        self.initialize()
+        self.initialize(iters)
     
-    def initialize(self):
+    def initialize(self, iters):
         # update X and counter
-        self.N = len(self.X.shape)
+        self.N = self.X.ndim
         self.counter += 1
 
         # update factors
-        factors, _ = cpd(self.X, self.R)
+        factors, _ = cpd(self.X, self.R, iters, verbose=False)
         self.factors = factors
 
         pof = PoF(self.X, self.factors)
@@ -95,22 +80,22 @@ class BASE_TENSOR_FAC:
     def cal_aux(self):
         print ('This model does not need to prepare aux!')
         print ()
+
+    def collect_X(self, X):
+        self.X = np.concatenate([self.X, X], -1)
         
 
-class MAST(BASE_TENSOR_FAC):
+class MAST(BASE_ONLINE_TENSOR_FAC):
     """
     refer to Song et al. Multi-Aspect Streaming Tensor Completion. KDD 2017
-
-    Step 1: initialize the factors by the base tensor
-    Step 2: update the factors in each step 
     """
-    def __init__(self, base_X, R):
-        super(MAST, self).__init__(base_X, R)
+    def __init__(self, base_X, R, iters=50):
+        super(MAST, self).__init__(base_X, R, iters)
         self.cal_aux()
     
     def update(self, X, verbose=False):
         # for calculating pof, we store X
-        self.X = np.concatenate([self.X, X], 2)
+        self.collect_X(X)
 
         self.factors, run_time = MAST_update(X, self.factors, alphaN=[1/15]*self.N, \
             alpha=1, iters=20, phi=1.05, eta_max=1, eta_init=1e-5, tol=1e-5)
@@ -123,23 +108,21 @@ class MAST(BASE_TENSOR_FAC):
         self.counter += 1
 
 
-class OnlineCPD(BASE_TENSOR_FAC):
+class OnlineCPD(BASE_ONLINE_TENSOR_FAC):
     """
     refer to Zhou et al. Accelerating Online CP Decompositions for \
         Higher Order Tensors. KDD 2016
-    
-    Step 1: initialize the factors by the base tensor
-    Step 2: update the factors in each step 
     """
-    def __init__(self, base_X, R):
-        super(OnlineCPD, self).__init__(base_X, R)
+    def __init__(self, base_X, R, iters=50):
+        super(OnlineCPD, self).__init__(base_X, R, iters)
         self.P = None
         self.Q = None
         self.cal_aux()
     
     def update(self, X, verbose=False):
         # for calculating pof, we store X
-        self.X = np.concatenate([self.X, X], 2)
+        self.collect_X(X)
+
         self.factors, self.P, self.Q, run_time = \
                         OnlineCPD_update(X, self.factors, self.P, self.Q)
         pof_score = PoF(self.X, self.factors)
@@ -155,24 +138,26 @@ class OnlineCPD(BASE_TENSOR_FAC):
         self.Q = [None for _ in range(self.N)]
 
         for i in range(self.N-1):
-            Qn, Pn = get_new_LHS_RHS_from_tensor(self.X, self.factors, i)
+            Qn, Pn = get_lhs_rhs_from_tensor(self.X, self.factors, i)
             self.P[i] = Pn; self.Q[i] = Qn
         
         print ('aux variables prepared!')
         print ()
 
 
-class SDT(BASE_TENSOR_FAC):
+class SDT(BASE_ONLINE_TENSOR_FAC):
     """
+    refer to Nion et al. Adaptive Algorithms to Track the PARAFAC Decomposition of a Third-Order Tensor. TSP 2009
+    CAN ONLY BE USED FOR THIRD-ORDER TENSOR
     """
-    def __init__(self, base_X, R):
-        super(SDT, self).__init__(base_X, R)
+    def __init__(self, base_X, R, iters=50):
+        super(SDT, self).__init__(base_X, R, iters)
         self.aux = []
         self.cal_aux()
 
     def update(self, X, verbose=False):
         # for calculating pof, we store X
-        self.X = np.concatenate([self.X, X], 2)
+        self.collect_X(X)
 
         self.factors, self.aux, run_time = SDT_update(X,self.factors, self.aux, gamma=0.99)
 
@@ -201,17 +186,19 @@ class SDT(BASE_TENSOR_FAC):
         print ()
         
 
-class RLST(BASE_TENSOR_FAC):
+class RLST(BASE_ONLINE_TENSOR_FAC):
     """
+    refer to Nion et al. Adaptive Algorithms to Track the PARAFAC Decomposition of a Third-Order Tensor. TSP 2009
+    CAN ONLY BE USED FOR THIRD-ORDER TENSOR
     """
-    def __init__(self, base_X, R):
-        super(RLST, self).__init__(base_X, R)
+    def __init__(self, base_X, R, iters=50):
+        super(RLST, self).__init__(base_X, R, iters)
         self.aux = []
         self.cal_aux()
 
     def update(self, X, verbose=False):
         # for calculating pof, we store X
-        self.X = np.concatenate([self.X, X], 2)
+        self.collect_X(X)
 
         self.factors, self.aux, run_time = RLST_update(X, self.factors, self.aux, gamma=0.995)
         pof_score = PoF(self.X, self.factors)
@@ -236,17 +223,18 @@ class RLST(BASE_TENSOR_FAC):
         print ()
 
 
-class CPStream(BASE_TENSOR_FAC):
+class CPStream(BASE_ONLINE_TENSOR_FAC):
     """
+    refer to Smith et al. Streaming Tensor Factorization for Infinite Data Sources. SDM 2018 
     """
-    def __init__(self, base_X, R):
-        super(CPStream, self).__init__(base_X, R)
+    def __init__(self, base_X, R, iters=50):
+        super(CPStream, self).__init__(base_X, R, iters)
         self.aux = None
         self.cal_aux()
 
     def update(self, X, verbose=False):
         # for calculating pof, we store X
-        self.X = np.concatenate([self.X, X], 2)
+        self.collect_X(X)
 
         self.factors, self.aux, run_time = CPStream_update(X, self.factors, self.aux, \
             mu=2, iters=20, tol=1e-5)
@@ -257,10 +245,8 @@ class CPStream(BASE_TENSOR_FAC):
         self.pof_update_list.append(pof_score)
         self.counter += 1
 
-
     def cal_aux(self):
         [A, B, C] = self.factors #[A, B, C]
-
         # auxilaries
         mu = 0.99
         coeff = np.array([mu ** i for i in range(C.shape[0])])[::-1]
@@ -270,18 +256,19 @@ class CPStream(BASE_TENSOR_FAC):
         print ()
 
 
-class GOCPTE(BASE_TENSOR_FAC):
+class GOCPTE(BASE_ONLINE_TENSOR_FAC):
     """
+    Our effective version for factorization
     """
-    def __init__(self, base_X, R):
-        super(GOCPTE, self).__init__(base_X, R)
+    def __init__(self, base_X, R, iters=50):
+        super(GOCPTE, self).__init__(base_X, R, iters)
         self.cal_aux()
 
     def update(self, X, verbose=False):
         # for calculating pof, we store X
-        self.X = np.concatenate([self.X, X], 2)
+        self.collect_X(X)
         
-        self.factors, run_time = GOCPT_update(X, self.factors, alpha=5)
+        self.factors, run_time = GOCPTE_fac_update(X, self.factors, alpha=5)
 
         pof_score = PoF(self.X, self.factors)
         if verbose:
