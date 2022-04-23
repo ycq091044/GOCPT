@@ -2,6 +2,21 @@ import numpy as np
 from numpy import linalg as la
 import time
 
+def khatri_rao(a, b):
+    a = np.asarray(a)
+    b = np.asarray(b)
+
+    if not(a.ndim == 2 and b.ndim == 2):
+        raise ValueError("The both arrays should be 2-dimensional.")
+
+    if not a.shape[1] == b.shape[1]:
+        raise ValueError("The number of columns for both arrays "
+                         "should be equal.")
+
+    # c = np.vstack([np.kron(a[:, k], b[:, k]) for k in range(b.shape[1])]).T
+    c = a[..., :, np.newaxis, :] * b[..., np.newaxis, :, :]
+    return c.reshape((-1,) + c.shape[2:])
+
 
 def generate_random_factors(X, R):
     """
@@ -197,6 +212,7 @@ def MAST_update(X, factors, alphaN, alpha=1, iters=20, phi=1.05, \
     tic = time.time()
 
     R = factors[0].shape[1]
+    new_dim = X.shape[-1]
     # initialize Z, Y, copy A factor lists
     Zs, Ys, As = [], [], []
     for idx, factor in enumerate(factors):
@@ -205,10 +221,10 @@ def MAST_update(X, factors, alphaN, alpha=1, iters=20, phi=1.05, \
             Ys.append(np.zeros_like(factor))
             As.append(factor.copy())
         else:
-            Zs.append(np.zeros((factor.shape[0]+1, R)))
-            Ys.append(np.zeros((factor.shape[0]+1, R)))
+            Zs.append(np.zeros((factor.shape[0]+new_dim, R)))
+            Ys.append(np.zeros((factor.shape[0]+new_dim, R)))
             As.append(factor.copy())
-    aug_last_factor = np.random.random((1,R))    
+    aug_last_factor = np.random.random((new_dim,R))    
     
     # preparation
     eta = eta_init
@@ -219,11 +235,11 @@ def MAST_update(X, factors, alphaN, alpha=1, iters=20, phi=1.05, \
         eta = min(eta * phi, eta_max)
         # update the last factors
         lhs, rhs = get_lhs_rhs_from_copy(As, factors, len(factors)-1)
-        factors[-1] = optimize(lhs + eta * eye, rhs + eta * Zs[-1][:-1,:].T + \
-            Ys[-1][:-1,:].T, reg=0).T 
+        factors[-1] = optimize(lhs + eta * eye, rhs + eta * Zs[-1][:-new_dim,:].T + \
+            Ys[-1][:-new_dim,:].T, reg=0).T 
         lhs, rhs = get_lhs_rhs_from_tensor(X, factors, len(factors)-1)
-        aug_last_factor = optimize(lhs + eta * eye, rhs + eta * Zs[-1][-1:,:].T + \
-            Ys[-1][-1:,:].T, reg=0).T
+        aug_last_factor = optimize(lhs + eta * eye, rhs + eta * Zs[-1][-new_dim:,:].T + \
+            Ys[-1][-new_dim:,:].T, reg=0).T
         
         # update other factors
         for j in range(len(factors) - 1):
@@ -268,9 +284,9 @@ def BiSVD(M, r, epsilon=1e-5, maxIter=50):
     t = 0
     while (la.norm(Qb @ Rb @ Qa.T - M) / la.norm(M) > epsilon) and (t < maxIter):
         B = M @ Qa
-        Qb, Rb = la.qr(B, mode='economic')
+        Qb, Rb = la.qr(B)
         A = M.T @ Qb
-        Qa, Ra = la.qr(A, mode='economic')
+        Qa, Ra = la.qr(A)
         t += 1
     return Qb, Rb, Qa
 
@@ -284,11 +300,11 @@ def SWASVD(T, U, S, V, gamma):
     # update V
     h = U.T @ T
     B = np.concatenate([gamma ** (0.5) * V @ S.T, h.T], axis=0)
-    V_new, Rb = la.qr(B[1:, :], mode='economic')
+    V_new, Rb = la.qr(B[1:, :])
     # update U
     xo = T - U @ h
     E_new = U @ Rb.T + xo @ V_new[-1:,:]
-    U_new, S_new = la.qr(E_new, mode='economic')
+    U_new, S_new = la.qr(E_new)
     return U_new, S_new, V_new, E_new
 
 
@@ -447,7 +463,7 @@ def CPStream_update(X, factors, G, mu=0.99, iters=20, tol=1e-5):
 
 
 
-def GOCPTE_fac_update(X, factors, alpha=1):
+def GOCPTE_fac_update(X, factors, alpha=1, iters=3):
     """
     Our efficient version for online tensor factorization
     INPUT:
@@ -459,23 +475,48 @@ def GOCPTE_fac_update(X, factors, alpha=1):
     """
     tic = time.time()
 
-    As = [factor.copy() for factor in factors]
-    
-    # get the last dim
-    lhs, rhs = get_lhs_rhs_from_tensor(X, factors, len(factors)-1)
-    aug_last_factor = optimize(lhs, rhs).T
-    
-    # update other factors
-    for j in range(len(factors) - 1):
-        lhs1, rhs1 = get_lhs_rhs_from_tensor(X, factors[:-1] + [aug_last_factor], j)
-        lhs2, rhs2 = get_lhs_rhs_from_copy(As, factors, j)
-        factors[j] = optimize(lhs1 + alpha * lhs2, rhs1 + alpha * rhs2).T
-    
-    # update the last factor
-    lhs, rhs = get_lhs_rhs_from_copy(As, factors, len(factors)-1)
-    factors[-1] = optimize(lhs, rhs).T
+    for _ in range(iters):
+        As = [factor.copy() for factor in factors]
+        
+        # get the last dim
+        lhs, rhs = get_lhs_rhs_from_tensor(X, factors, len(factors)-1)
+        aug_last_factor = optimize(lhs, rhs).T
+        
+        # update other factors
+        for j in range(len(factors) - 1):
+            lhs1, rhs1 = get_lhs_rhs_from_tensor(X, factors[:-1] + [aug_last_factor], j)
+            lhs2, rhs2 = get_lhs_rhs_from_copy(As, factors, j)
+            factors[j] = optimize(lhs1 + alpha * lhs2, rhs1 + alpha * rhs2).T
+        
+        # update the last factor
+        lhs, rhs = get_lhs_rhs_from_copy(As, factors, len(factors)-1)
+        factors[-1] = optimize(lhs, rhs).T
 
     return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], axis=0)], time.time() - tic 
+
+
+def GOCPT_fac_update(X, factors, iters):
+    """
+    Our full version for online tensor factorization
+    INPUT:
+        - <tensor> X: the input new tensor slice, (..., ..., ..., 1)
+        - <matrix list> factors: the current factor matrix list
+        - <float> alpha: the weight for balancing the new and past information
+    OUTPUT:
+        - <matrix list> factors: the current factor matrix list
+    """
+    tic = time.time()
+    # get the last dim
+    lhs, rhs = get_lhs_rhs_from_tensor(X[...,factors[-1].shape[0]:], factors, len(factors)-1)
+    aug_last_factor = optimize(lhs, rhs).T
+    factors[-1] = np.concatenate([factors[-1], aug_last_factor], axis=0)
+    
+    for _ in range(iters):
+        for i in range(X.ndim):
+            lhs, rhs = get_lhs_rhs_from_tensor(X, factors, i)
+            factors[i] = optimize(lhs, rhs).T
+
+    return factors, time.time() - tic 
 
 
 # ----------- the following is for online tensor completion -----------
@@ -564,7 +605,7 @@ def cpc_als_iteration(mask_X, factors, Omega):
     return factors, toc - tic
 
 
-def OnlineSGD_update(mask_X, mask, factors, lr, index=1, reg=1e-5):
+def OnlineSGD_update(mask_X, mask, factors, lr, index=1, iters=3, reg=1e-5):
     """
     This method uses stochastic gradient descent to update each factor
     INPUT:
@@ -580,23 +621,27 @@ def OnlineSGD_update(mask_X, mask, factors, lr, index=1, reg=1e-5):
     tic = time.time()
     _, R = factors[0].shape
 
-    # get new row c
-    lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
-    aug_last_factor = optimize(lhs[0], rhs[:, :1]).T
+    for _ in range(iters):
+        # get new row c
+        lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
+        aug_last_factor = np.zeros_like(rhs.T)
+        for k in range(aug_last_factor.shape[0]):
+            aug_last_factor[k] = optimize(lhs[k], rhs[:, k]).T
 
-    # update A1, A2, A3
-    rec_X = rec_from_factors(factors[:-1] + [aug_last_factor])
-    grad = []
-    for i in range(mask.ndim - 1):
-        lhs, rhs = get_lhs_rhs_from_tensor(mask_X - mask * rec_X, factors, i)
-        grad.append(optimize(lhs, rhs).T)
-        
-    for i in range(mask.ndim - 1):
-        factors[i] = (1 - lr * reg / (index+1)) * factors[i] - lr * grad[i]
+        # update A1, A2, A3
+        rec_X = rec_from_factors(factors[:-1] + [aug_last_factor])
+        grad = []
+        for i in range(mask.ndim - 1):
+            lhs, rhs = get_lhs_rhs_from_tensor(mask_X - mask * rec_X, factors, i)
+            grad.append(optimize(lhs, rhs).T)
+            
+        for i in range(mask.ndim - 1):
+            factors[i] = (1 - lr * reg / (index+1)) * factors[i] - lr * grad[i]
+            
     return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], time.time() - tic
 
 
-def OLSTEC_update(mask_X, mask, factors, R_ls, S_ls, mu=1e-9, Lambda=0.88):
+def OLSTEC_update(mask_X, mask, factors, R_ls, S_ls, iters=3, mu=1e-9, Lambda=0.88):
     """
     Kasai, Online Low-Rank Tensor Subspace Tracking from Incomplete Data by CP Decomposition \
         using Recursive Least Squares, ICASSP 2016
@@ -617,25 +662,27 @@ def OLSTEC_update(mask_X, mask, factors, R_ls, S_ls, mu=1e-9, Lambda=0.88):
     _, R = factors[0].shape
     eye = np.eye(R)
 
-    # obtain the aug_last_factor
-    lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
-    aug_last_factor = optimize(lhs[0], rhs[:, :1]).T
+    for _ in range(iters):
+        # obtain the aug_last_factor
+        lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
+        aug_last_factor = np.zeros_like(rhs.T)
+        for k in range(aug_last_factor.shape[0]):
+            aug_last_factor[k] = optimize(lhs[k], rhs[:, k]).T
 
-    # update the other factors
+        # update the other factors
+        for i in range(mask.ndim - 1):
+            lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors[:-1] + [aug_last_factor], i)
+            R_ls[i] = Lambda * R_ls[i] + lhs + mu * (1 - Lambda) * eye
+            S_ls[i] = Lambda * S_ls[i] + rhs
 
-    for i in range(mask.ndim - 1):
-        lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors[:-1] + [aug_last_factor], i)
-        R_ls[i] = Lambda * R_ls[i] + lhs + mu * (1 - Lambda) * eye
-        S_ls[i] = Lambda * S_ls[i] + rhs
-
-        for k in range(factors[i].shape[0]):
-            factors[i][k] = optimize(R_ls[i][k], S_ls[i][:, k]).T
+            for k in range(factors[i].shape[0]):
+                factors[i][k] = optimize(R_ls[i][k], S_ls[i][:, k]).T
     
     return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], \
         R_ls, S_ls, time.time() - tic
 
 
-def GOCPTE_comp_update(mask_X, mask, factors, alpha=1):
+def GOCPTE_comp_update(mask_X, mask, factors, alpha=1, iters=3):
     """
     Our efficient version for online tensor completion
     INPUT:
@@ -646,19 +693,101 @@ def GOCPTE_comp_update(mask_X, mask, factors, alpha=1):
         - <matrix list> factors: the current factor matrix list
     """
     tic = time.time()
-    As = [factor.copy() for factor in factors]
+
+    for _ in range(iters):
+        As = [factor.copy() for factor in factors]
+        # get a new row in the last factor
+        lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
+        aug_last_factor = np.zeros_like(rhs.T)
+        for k in range(aug_last_factor.shape[0]):
+            aug_last_factor[k] = optimize(lhs[k], rhs[:, k]).T
+
+        for i in range(mask.ndim - 1):
+            lhs1, rhs1 = get_lhs_rhs_mask(mask, mask_X, factors[:-1] + [aug_last_factor], i)
+            lhs2, rhs2 = get_lhs_rhs_from_copy(As, factors, i)
+
+            for k in range(factors[i].shape[0]):
+                factors[i][k] = optimize(lhs1[k] + alpha * lhs2, \
+                        rhs1[:, k] + alpha * rhs2[:, k]).T
+    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], time.time() - tic
+
+
+def GOCPT_comp_update(mask_X, mask, factors, iters=3):
+    """
+    Our full version for online tensor completion
+    INPUT:
+        - <tensor> X: the input new tensor slice, (..., ..., ..., 1)
+        - <matrix list> factors: the current factor matrix list
+        - <float> alpha: the weight for balancing the new and past information
+    OUTPUT:
+        - <matrix list> factors: the current factor matrix list
+    """
+    tic = time.time()
+    new_dim = mask.shape[-1] - factors[-1].shape[0]
 
     # get a new row in the last factor
-    lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
-    aug_last_factor = optimize(lhs[0], rhs[:, :1]).T
+    lhs, rhs = get_lhs_rhs_mask(mask[...,-new_dim:], mask_X[...,-new_dim:], factors, mask.ndim-1)
+    aug_last_factor = np.zeros_like(rhs.T)
+    for k in range(aug_last_factor.shape[0]):
+        aug_last_factor[k] = optimize(lhs[k], rhs[:, k]).T
+    factors[-1] = np.concatenate([factors[-1], aug_last_factor], 0)
 
-    for i in range(mask.ndim - 1):
-        lhs1, rhs1 = get_lhs_rhs_mask(mask, mask_X, factors[:-1] + [aug_last_factor], i)
-        lhs2, rhs2 = get_lhs_rhs_from_copy(As, factors, i)
+    for _ in range(iters):
+        for i in range(mask.ndim):
+            lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, i)
+            for k in range(factors[i].shape[0]):
+                factors[i][k] = optimize(lhs[k] , rhs[:, k]).T
+    return factors, time.time() - tic
 
-        for k in range(factors[i].shape[0]):
-            factors[i][k] = optimize(lhs1[k] + alpha * lhs2, \
-                    rhs1[:, k] + alpha * rhs2[:, k]).T
 
-    toc = time.time()
-    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], toc - tic
+# simulate the online setting
+def generate_simulation(X, prep=0.5, inc=1):
+    """
+    Generate the simulation setting from a tensor with "time" as the last mode
+    INPUT:
+        - <tensor> X: (I1, I2, ..., In)
+        - <int> prep: the percentage of preparation data
+        - <int> inc: how many new slices at the next step
+    OUTPUT:
+        - <tensor> X_0: the prepration tensor
+        - <tensor list> X_inc_ls: a list of new tensors that appear later
+    """
+    if type(X) != type([1,2]):
+        In = X.shape[-1]
+        prep_threshold = round(In * prep)
+        X_0 = X[..., :prep_threshold]
+        X_inc_ls = []
+        for i in range(prep_threshold+1, In, inc):
+            X_inc_ls.append(X[..., i:i+inc])
+
+        message = """
+        ---------- new OTF setting ------------
+        base tensor size: {},
+        new tensor increment size: {},
+        tensor will be updated {} times.
+        """.format(X_0.shape, X_inc_ls[0].shape, len(X_inc_ls))
+        print (message)
+
+        return X_0, X_inc_ls
+
+    else:
+        X, mask = X
+        In = X.shape[-1]
+        prep_threshold = round(In * prep)
+        X_0 = X[..., :prep_threshold]
+        mask_0 = mask[..., :prep_threshold]
+        X_inc_ls, mask_inc_ls = [], []
+        for i in range(prep_threshold+1, In, inc):
+            X_inc_ls.append(X[..., i:i+inc])
+            mask_inc_ls.append(mask[..., i:i+inc])
+
+        message = """
+        ---------- new OTC setting ------------
+        base tensor size: {},
+        new tensor increment size: {},
+        tensor will be updated {} times.
+        """.format(X_0.shape, X_inc_ls[0].shape, len(X_inc_ls))
+        print (message)
+
+        return [X_0, mask_0], [X_inc_ls, mask_inc_ls]
+    

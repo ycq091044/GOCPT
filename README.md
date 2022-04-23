@@ -1,105 +1,105 @@
-# Code and Data for AAAI'22 submission: GOCPT
+# GOCPT
+Generalized Online Canonical Polyadic Tensor Factorization and Completion
 
-- We propose a generalized online tensor factorization and completion framework, called ``GOCPT``. Our framework can support the most general tensor evolving scenarios with three typical types of evolving patterns. 
-- Our GOCPT can unify the popular **online tensor factorization** and **streaming tensor completion** settings. Also, we can support other two settings: (i) **online tensor completion** (where tensor size does not change and the entries are gradually filled) and (ii) **factorization with changing values** (where the tensor size does not change and the entries can gradually updated).
-- In this repo, we provide the code for (1) our GOCPT; (2) all baselines for all settings.
+- This package ``GOCPT`` can support the following evolving patterns:
+    - **mode growth** along one or more dimensions
+    - **missing value filling** for incomplete tensors
+    - **value updates** for previously incorrect inputs
+    - **rank changes** during the evolution
+- We provide two versions of our generalized model
+    - ``GOCPT``: need to preserve all previous data and provides more accurate fit
+    - ``GOCPTE (economy version)``: no previous data is needed and can provide fast speed
+- Our GOCPT can unify the following common **online tensor evolution** settings
 
 ---
-## 1. Package dependency
-
+## 1. Package Installation
 ```bash
-pip install scipy==1.5.0
-pip install numpy==1.19.1, pickle
+$ pip install GOCPT
 ```
-The dependency packages are pretty common. If any missing, please install that.
+To look up for help, directly type "GOCPT" in the cmd and the help message will pop up.
+```bash
+$ GOCPT
+```
+## 2. Examples of Different Settings
+### 2.1 Tensor Loader 
+``GOCPT.datasets``
+- datasets.GCSS
+- datasets.FACE_3D
+- datasets.JHU_COVID
 
-## 2. Quick start and reproducibility
-Run our GOCPT and baselines on ``the most general case`` (default on the JHU Covid data)
+The tensor data is formatted as ``np.ndarry`` type (the current version is compatible with numpy only, we are building torch version to support CUDA). They can be loaded from external data or can be synthetically generated from our scripts with various distribution.
 ```python
-jupyter notebook general.ipynb
+# create data from external sources
+from GOCPT import datasets
+GCSS = datasets.GCSS()
+FACE_3D = datasets.FACE_3D()
 ```
 
-Run our GOCPT and baselines on ``online tensor factorization``
 ```python
-cd ./src
-python online_tensor_factorization.py --data synthetic
-python online_tensor_factorization.py --data FACE
-python online_tensor_factorization.py --data GCSS
+# creating synthetic tensors
+full_tensor = datasets.syn_data(R=5, size=(5,10,15,20), dist='unif')
+[masked_tensor, mask] = datasets.syn_data(R=5, size=(15, 5, 8), \
+        dist='normal', with_mask=0.95)
 ```
+### 2.2. Online Tensor Factorization (OTF)
+``GOCPT.otf``
+- Support arbitrary order tensors
+    - otf.OnlineCPD
+    - otf.CPStream
+    - otf.MAST
+    - otf.GOCPTE
+    - otf.GOCPT
+- Support only 3-order tensors
+    - otf.SDT
+    - otf.RLST
 
-Run our GOCPT and baselines on ``streaming tensor completion``
+This setting needs a base tensor ``X_0`` for initial factor estimation and a list of tensor increments ``X_inc_ls`` for each subsequent updates. CURRENTLY, we only support the setting, where only the last tensor mode is evolving! Using a 4-th order tensor as an example, ``X_0: (3, 10, 15, 50)`` and ``x_inc_ls[0]: (3, 10, 15, 2)``, ``x_inc_ls[1]: (3, 10, 15, 5)``, ... 
 ```python
-cd ./src
-python streaming_tensor_completion.py --data synthetic
-python streaming_tensor_completion.py --data Indian
+# generate simulation OTF setting
+from GOCPT import utils
+[X_0, X_inc_ls] = utils.generate_simulation(full_tensor, prep=0.3, inc=3)
+    
+# prepare model and run online updates
+from GOCPT import otf
+model = otf.GOCPTE(X_0, R=5, iters=100)
+for increments in X_inc_ls:
+    model.update(increments, verbose=True)
 ```
+### 2.3. Online Tensor Completion (OTC)
+``GOCPT.otc``
+- otc.OLSTEC
+- otc.OnlineSGD
+- otc.GOCPTE
+- otc.GOCPT
 
-Run ablation study
+The settings are similar as OTF, while the base tensor and the increments are incomplete tensors with a mask.
 ```python
-cd ./src
-python ablation_study_on_sparsity.py
+# generate simulation OTC setting
+[[X_0, mask_0], [X_inc_ls, mask_inc_ls]] = \
+        utils.generate_simulation([masked_X, mask], prep=0.3, inc=3)
+    
+# prepare model and run online updates
+from GOCPT import otc
+model = otc.GOCPTE([X_0, mask_0], R=5, iters=100)
+for increments in zip(X_inc_ls, mask_inc_ls):
+        model.update(increments, verbose=True)
 ```
 
-Run our GOCPT and baselines on ``online tensor completion``
+### 2.4. Online Tensor Completion (OTC)
 ```python
-cd ./src
-python online_tensor_completion.py --data synthetic
+# generate simulation OTC setting
+[[X_0, mask_0], [X_inc_ls, mask_inc_ls]] = \
+        utils.generate_simulation([masked_X, mask], prep=0.3, inc=3)
+    
+# prepare model and run online updates
+from GOCPT import otc
+model = otc.GOCPTE([X_0, mask_0], R=5, iters=100)
+for increments in zip(X_inc_ls, mask_inc_ls):
+        model.update(increments, verbose=True)
 ```
-
-Run our GOCPT and baselines on ``factorization with changing values``
-```python
-cd ./src
-python factorization_with_changing_value.py --data synthetic
-```
-
-- Note that, for each of the settings, our model can be easily applied to other tensor data by replacing the existing data.
-
-## 3. Folder tree
-
-- ./exp-data
-    - FACE-3D.pkl: ORL Database of Faces contains 400 shots of face images with size 112 pixels by 99 pixels. The download link is here https://cam-orl.co.uk/facedatabase.html.
-    - GCSS.pkl: This is a dataset, borrowed from https://github.com/ycq091044/MTC. This data contains google covid-19 symptom search results during the complete year 2020. The data can be viewed as a third-order tensor: 50 states, 422 keywords, and 362 days. The original link is here https://pair-code.github.io/covid19_symptom_dataset/ and we use the processing files provided by the above repo to generate the GCSS.pkl.
-    - Indian_pines_corrected.mat: This is also an open dataset, containing 200 shots of hyperspectral images with size 145 pixels by 145 pixels. The link is here https://purr.purdue.edu/publications/1947/1.
-    - jhu_covid_tensor.pickle: This is a dataset, borrowed from ``Qian, C., Kargas, N., Xiao, C., Glass, L., Sidiropoulos, N. and Sun, J., Multi-version Tensor Completion for Time-delayed Spatio-temporal Data. IJCAI 2021.`` The original dataset is open and collected from https://github.com/CSSEGISandData/COVID-19. 
-- ./src
-    - ablation_study_on_sparsity.py: the script is used to evaluate the performance of sparse or dense strategy proposed in our paper for Experimental Section 5.5.
-    - online_tensor_factorization.py: this script is used to evaluate on one of the most popular ``online tensor factorization`` setting, used in experimental section 5.3 and appendix section B.3.
-    - streaming_tensor_completion.py: this script is used to evaluate on another the most popular ``streaming tensor completion`` setting, used in experimental section 5.4 and appendix section B.4.
-    - factorization_with_changing_value.py: this script is used for appendix section B.6.
-    - online_tensor_completion.py: this script is used for appendix section B.5.
-    - model.py: this is the util file that contains all common or iteration modules used in other scripts.
-- general.ipynb: this is the scripts used in evaluating on the most general setting.
-
-## 4. Synthetic data generation and evaluation
-### 4.1 Generate the synthetic data
-- In all settings, the synthetic data are generated the same way as follows
-```python
-# for example, if we want to generate a low-rank tensor 
-#   with I1, I2, I3, R = (100, 100, 500, 5)
-I, J, K, R = 100, 100, 500, 5
-A0 = np.random.random((I, R))
-B0 = np.random.random((J, R))
-C0 = np.random.random((K, R))
-X = np.einsum('ir,jr,kr->ijk',A0,B0,C0)
-```
-
-### 4.2 Evaluation on the synthetic data
-- we have encoded the synthetic data generation code in each script
-- directly call synthetic data, and the results will appear
-```python
-cd ./src
-python online_tensor_factorization.py --data synthetic
-python streaming_tensor_completion.py --data synthetic
-python online_tensor_completion.py --data synthetic
-python factorization_with_changing_value.py --data synthetic
-python ablation_study_on_sparsity.py
-```
-
-### 4.3 Evaluation on real-world data
-- it is trivial to replace the ``synthetic data generation module`` to ``[you own real data]`` and the rest of the files can run automatically.
 
 
 ## 5. Future work
 - We plan to refactorize the code into torch version and support ``cuda`` to accelerate our computation
-- We will consider more tensor evolving patterns and extend our frameworks, such as tensor rank can change or the mode can shrink during the evolution.
-- As a long-term plan, we will release a python package called ``GOCPT``, which provides the fast/distributed/parallel implementations of the baselines and our GOCPT models for subsequent research.
+- We will consider more tensor evolving patterns to extend the coverage of our package.
+- As a long-term plan, we plan to support sparse tensor implementations for subsequent research.
