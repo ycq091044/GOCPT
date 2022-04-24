@@ -1,8 +1,7 @@
 import numpy as np
-from regex import P
 from .utils import cpd_als_iteration, OnlineCPD_update, get_lhs_rhs_from_tensor, \
-        MAST_update, BiSVD, SDT_update, RLST_update, CPStream_update, GOCPTE_fac_update, \
-        generate_random_factors
+        MAST_update, BiSVD, SDT_update, RLST_update, CPStream_update, \
+        generate_random_factors, khatri_rao
 from .metrics import PoF
 from numpy import linalg as la
 
@@ -21,28 +20,21 @@ def cpd(X, R, iters=None, verbose=False):
     factors = generate_random_factors(X, R)
     pof_score_list = []
 
-    if iters is not None:
-        for i in range(iters):
-            factors, run_time = cpd_als_iteration(X, factors)
-            pof_score = PoF(X, factors)
-            if verbose and (i % 10 == 0):
-                print ("{}-th iters, PoF: {}, time: {}s".format(i, pof_score, run_time))
-            pof_score_list.append(pof_score)
-    else:
-        pof_score = PoF(X, factors)
-        max_iters = 50
-        for i in range(max_iters):
-            factors, run_time = cpd_als_iteration(X, factors)
-            new_pof_score = PoF(X, factors)
-            if verbose and (i % 10 == 0):
-                print ("{}-th iters, PoF: {}, time: {}s".format(i, PoF(X, factors, run_time)))
-            # whether early stop
-            if (new_pof_score - pof_score) / (pof_score + 1e-8) < 1e-5:
-                break
-            else:
-                pof_score = new_pof_score
-            pof_score_list.append(pof_score)
-    return factors, pof_score_list
+    if iters is None:
+        iters = 50
+    pof_score = PoF(X, factors)
+    for i in range(iters):
+        factors, run_time = cpd_als_iteration(X, factors)
+        new_pof_score = PoF(X, factors)
+        if verbose and (i % 10 == 0):
+            print ("{}-th iters, PoF: {}, time: {}s".format(i, PoF(X, factors), run_time))
+        # whether early stop
+        if (new_pof_score - pof_score) / (1 - pof_score) < 1e-5:
+            break
+        else:
+            pof_score = new_pof_score
+        pof_score_list.append(pof_score)
+    return factors
 
 
 def draw_pof(pof_score):
@@ -70,7 +62,7 @@ class BASE_ONLINE_TENSOR_FAC:
         self.counter += 1
 
         # update factors
-        factors, _ = cpd(self.X, self.R, iters, verbose=False)
+        factors = cpd(self.X, self.R, iters, verbose=False)
         self.factors = factors
 
         pof = PoF(self.X, self.factors)
@@ -93,7 +85,7 @@ class MAST(BASE_ONLINE_TENSOR_FAC):
         super(MAST, self).__init__(base_X, R, iters)
         self.cal_aux()
     
-    def update(self, X, verbose=False):
+    def update(self, X, verbose=True):
         # for calculating pof, we store X
         self.collect_X(X)
 
@@ -102,7 +94,7 @@ class MAST(BASE_ONLINE_TENSOR_FAC):
 
         pof_score = PoF(self.X, self.factors)
         if verbose:
-            print ("{}-th update, PoF: {}, run_time: {}s".\
+            print ("{}-th update, PoF: {:.4}, run_time: {:.4}s".\
                             format(self.counter, pof_score, run_time))
         self.pof_update_list.append(pof_score)
         self.counter += 1
@@ -119,7 +111,7 @@ class OnlineCPD(BASE_ONLINE_TENSOR_FAC):
         self.Q = None
         self.cal_aux()
     
-    def update(self, X, verbose=False):
+    def update(self, X, verbose=True):
         # for calculating pof, we store X
         self.collect_X(X)
 
@@ -127,7 +119,7 @@ class OnlineCPD(BASE_ONLINE_TENSOR_FAC):
                         OnlineCPD_update(X, self.factors, self.P, self.Q)
         pof_score = PoF(self.X, self.factors)
         if verbose:
-            print ("{}-th update, PoF: {}, run_time: {}s".\
+            print ("{}-th update, PoF: {:.4}, run_time: {:.4}s".\
                             format(self.counter, pof_score, run_time))
         self.pof_update_list.append(pof_score)
         self.counter += 1
@@ -155,7 +147,7 @@ class SDT(BASE_ONLINE_TENSOR_FAC):
         self.aux = []
         self.cal_aux()
 
-    def update(self, X, verbose=False):
+    def update(self, X, verbose=True):
         # for calculating pof, we store X
         self.collect_X(X)
 
@@ -163,7 +155,7 @@ class SDT(BASE_ONLINE_TENSOR_FAC):
 
         pof_score = PoF(self.X, self.factors)
         if verbose:
-            print ("{}-th update, PoF: {}, run_time: {}s".\
+            print ("{}-th update, PoF: {:.4}, run_time: {:.4}s".\
                             format(self.counter, pof_score, run_time))
         self.pof_update_list.append(pof_score)
         self.counter += 1
@@ -178,7 +170,7 @@ class SDT(BASE_ONLINE_TENSOR_FAC):
         U, S, V = BiSVD(X_pre, self.R)
         E = U @ S
         C = np.einsum('kr,k->kr',C,coeff,optimize=True)
-        W = la.inv(E.T @ E) @ E.T @ la.khatri_rao(B,A)
+        W = la.inv(E.T @ E) @ E.T @ khatri_rao(B,A)
         Wi = la.inv(W)
 
         self.aux = [W, Wi, V, S, U]
@@ -196,14 +188,14 @@ class RLST(BASE_ONLINE_TENSOR_FAC):
         self.aux = []
         self.cal_aux()
 
-    def update(self, X, verbose=False):
+    def update(self, X, verbose=True):
         # for calculating pof, we store X
         self.collect_X(X)
 
         self.factors, self.aux, run_time = RLST_update(X, self.factors, self.aux, gamma=0.995)
         pof_score = PoF(self.X, self.factors)
         if verbose:
-            print ("{}-th update, PoF: {}, run_time: {}s".\
+            print ("{}-th update, PoF: {:.4}, run_time: {:.4}s".\
                             format(self.counter, pof_score, run_time))
         self.pof_update_list.append(pof_score)
         self.counter += 1
@@ -232,7 +224,7 @@ class CPStream(BASE_ONLINE_TENSOR_FAC):
         self.aux = None
         self.cal_aux()
 
-    def update(self, X, verbose=False):
+    def update(self, X, verbose=True):
         # for calculating pof, we store X
         self.collect_X(X)
 
@@ -240,7 +232,7 @@ class CPStream(BASE_ONLINE_TENSOR_FAC):
             mu=2, iters=20, tol=1e-5)
         pof_score = PoF(self.X, self.factors)
         if verbose:
-            print ("{}-th update, PoF: {}, run_time: {}s".\
+            print ("{}-th update, PoF: {:.4}, run_time: {:.4}s".\
                             format(self.counter, pof_score, run_time))
         self.pof_update_list.append(pof_score)
         self.counter += 1
@@ -254,25 +246,3 @@ class CPStream(BASE_ONLINE_TENSOR_FAC):
         self.aux = G
         print ('aux variables prepared!')
         print ()
-
-
-class GOCPTE(BASE_ONLINE_TENSOR_FAC):
-    """
-    Our effective version for factorization
-    """
-    def __init__(self, base_X, R, iters=50):
-        super(GOCPTE, self).__init__(base_X, R, iters)
-        self.cal_aux()
-
-    def update(self, X, verbose=False):
-        # for calculating pof, we store X
-        self.collect_X(X)
-        
-        self.factors, run_time = GOCPTE_fac_update(X, self.factors, alpha=5)
-
-        pof_score = PoF(self.X, self.factors)
-        if verbose:
-            print ("{}-th update, PoF: {}, run_time: {}s".\
-                            format(self.counter, pof_score, run_time))
-        self.pof_update_list.append(pof_score)
-        self.counter += 1

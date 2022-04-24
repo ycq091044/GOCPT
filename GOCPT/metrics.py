@@ -1,4 +1,3 @@
-import numpy as np
 from numpy import linalg as la
 from .utils import rec_from_factors
 
