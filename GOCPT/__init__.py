@@ -1,34 +1,41 @@
-import sys
-
 # README
 README = """
 ---------------------------- Help ---------------------------
+Chaoqi Yang @ UIUC, chaoqiy2@illinois.edu
+-------------------------------------------------------------
 GOCPT is a python open-source package for handing generalized 
 online tensor decomposition and completion.
 
-We provide the following functions:
+We provide the following tensor functions:
 
-    - for online tensor factorization of arbitraty tensors
-        - GOCPT.otf.OnlineCPD
-        - GOCPT.otf.MAST
-        - GOCPT.otf.CPStream
-        - GOCPT.otf.GOCPTE
+    - for generalized online tensor factorization (GOTF)
+        - GOCPT.gotf.GOCPT
+        - GOCPT.gotf.GOCPTE
+    
+    - for generalized online tensor completion (GOTC)
+        - GOCPT.gotc.GOCPT
+        - GOCPT.gotc.GOCPTE
+    
+    - for common online tensor factorization (OTF)
+        - arbitrary order tensor
+            - GOCPT.otf.OnlineCPD
+            - GOCPT.otf.MAST
+            - GOCPT.otf.CPStream
+        - 3-order tensors and 1 slices at each step only
+            - GOCPT.otf.SDT
+            - GOCPT.otf.RLST
 
-    - for online tensor factorization of 3-order tensors
-        - GOCPT.otf.SDT
-        - GOCPT.otf.RLST
-
-    - for online tensor completion of arbitraty tensors
+    - for common online tensor completion (OTC)
         - GOCPT.otc.OnlineSGD
         - GOCPT.otc.OLSTEC
-        - GOCPT.otc.GOCPTE
 
 EXAMPLE:
-    >> from GOCPT import otf, datasets
+    >> from GOCPT import gotf, datasets, simulation
     >> X = datasets.GCSS()
-    >> model = otf.GOCPTE(base_X=X, R=5, iters=50)
-    >> new_slice = X[...,-2:-1]
-    >> model.update(new_slice, verbose=True) 
+    >> [X_0, X_inc_ls] = simulation.growth_1d(X, prep=0.3, inc=3)
+    >> model = gotf.GOCPTE(X_0, R=5)
+    >> for increments in X_inc_ls:
+    ...     model.update(increments) 
 """
 
 def GOCPT():
