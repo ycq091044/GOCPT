@@ -15,7 +15,21 @@ def JHU_COVID():
     jhu_covid = pickle.load(request.urlopen('https://drive.google.com/uc?id=1noy2iDLGB1xF8NNp4XcsMn6x4KXbjM_9'))
     return jhu_covid
 
-def syn_data(R, size, dist='unif', with_mask=None):
+def syn_data(R, size, dist='unif', sparsity=None):
+    """
+    synthetic tensor generation
+    INPUT:
+        - <int> R: tensor rank
+        - <list/tuple> size: tensor mode specification, e.g., [5,10,15]
+        - <str> dist: in which distribution
+        - <float> sparsity: sparsity of the tensor, default is None
+    OUTPUT:
+        if sparsity is not None:
+            - <tensor> masked_X
+            - <tensor> mask
+        if sparsity is None:
+            - <tensor> full_tensor
+    """
     In = size
     if 'unif' in dist:
         factors = [np.random.random((Ii, R)) for Ii in In]
@@ -24,8 +38,8 @@ def syn_data(R, size, dist='unif', with_mask=None):
     
     syn_tensor = rec_from_factors(factors)
 
-    if with_mask is None:
+    if sparsity is None:
         return syn_tensor
     else:
-        mask = np.random.random(syn_tensor.shape) >= with_mask
+        mask = np.random.random(syn_tensor.shape) >= sparsity
         return [syn_tensor * mask, mask]

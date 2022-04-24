@@ -1,6 +1,27 @@
+from telnetlib import DO
 import numpy as np
 from numpy import linalg as la
 import time
+
+# ---------------- basic function ----------------------
+
+def PoF(X, factors, mask=None):
+    """
+    The percentage of fitness (POF) metric
+    INPUT:
+        - <tensor> X: the original tensor
+        - <tensor> rec: the reconstructed tensor
+    OUTPUT:
+        - <scalar> PoF_metric: the metric, higher is better 
+    """
+    if mask is None:
+        Rec = rec_from_factors(factors)
+        PoF_metric = 1 - la.norm(Rec - X) / la.norm(X)
+    else:
+        Rec = rec_from_factors(factors)
+        PoF_metric = 1 - la.norm(mask * Rec - X) / la.norm(X)
+    return PoF_metric
+
 
 def khatri_rao(a, b):
     a = np.asarray(a)
@@ -18,7 +39,45 @@ def khatri_rao(a, b):
     return c.reshape((-1,) + c.shape[2:])
 
 
-def generate_random_factors(X, R):
+def rank_increase(factors, R):
+    """
+    padding zero vectors to each factors to increase the rank but keep the rec results
+    INPUT:
+        - <matrix list> factors: the input factor list
+        - <int> R: new rank, which is larger than previous rank
+    OUTPUT:
+        - <matrix list> factors: new factors obtained by in-place operation
+    """
+    for i in range(len(factors)):
+        Ii, R_old = factors[i].shape
+        factors[i] = np.concatenate([factors[i], np.zeros((Ii, R - R_old))], 1)
+    return factors
+
+
+def rank_decrease(factors, R, max_iters=20):
+    """
+    decrease the rank of factors
+    INPUT:
+        - <matrix list> factors: the input factor list
+        - <int> R: new rank, which is larger than previous rank
+    OUTPUT:
+        - <matrix list> new_factors: the new factor list
+    """
+    new_factors = [factor[:, :R].copy() for factor in factors]
+    X = rec_from_factors(factors)
+    pof_score = PoF(X, new_factors)
+    for _ in range(max_iters):
+        for j in range(len(factors)):
+            lhs, rhs = get_lhs_rhs_from_copy(factors, new_factors, j)
+            new_factors[j] = optimize(lhs, rhs).T
+        new_pof_score = PoF(X, new_factors)
+        # whether early stop
+        if (new_pof_score - pof_score) / (1 - pof_score + 1e-3) < 1e-5:
+            break
+    return new_factors, new_pof_score
+
+
+def generate_random_factors(X, R, dist='unif'):
     """
     This function is to obtain the random initialization of the factors given the tensor
     INPUT:
@@ -30,7 +89,10 @@ def generate_random_factors(X, R):
     # obtain the size of the tensor
     In = X.shape
     # randomly initialize each factor
-    random_factors = [np.random.random((i, R)) for i in In]
+    if dist == 'unif':
+        random_factors = [np.random.random((i, R)) for i in In]
+    elif dist == 'normal':
+        random_factors = [np.random.randn(i, R) for i in In]
     return random_factors
 
 
@@ -62,12 +124,13 @@ def optimize(A, B, reg=1e-6):
     OUTPUT:
         - <matrix> X: the solution (R, In)
     """
+    eye = np.eye(A.shape[1])
     try:
-        L = la.cholesky(A + np.eye(A.shape[1]) * reg)
+        L = la.cholesky(A + eye * reg)
         y = la.solve_triangular(L.T, B, lower=True)
         x = la.solve_triangular(L, y, lower=False)
     except:
-        x = la.solve(A + np.eye(A.shape[1]) * reg, B)
+        x = la.solve(A + eye * reg, B)
     return x
 
 
@@ -157,6 +220,8 @@ def get_lhs_rhs_from_copy(As, factors, i):
     rhs = np.einsum(rhs_str,*rhs_mat,optimize=True)
     return lhs, rhs
 
+
+# ------------ for online tensor factorization ---------------
 
 def OnlineCPD_update(X, factors, P, Q):
     """
@@ -462,18 +527,26 @@ def CPStream_update(X, factors, G, mu=0.99, iters=20, tol=1e-5):
     return [A, B, np.concatenate([C, c], axis=0)], G, toc - tic
 
 
+# ------------ for generalized online tensor factorization --------
 
-def GOCPTE_fac_update(X, factors, alpha=1, iters=3):
+def GOCPTE_fac_update(update, factors, alpha=1, iters=3):
     """
     Our efficient version for online tensor factorization
     INPUT:
-        - <tensor> X: the input new tensor slice, (..., ..., ..., 1)
+        - [<tensor>, <int>] update: the input new tensor slice and new rank
         - <matrix list> factors: the current factor matrix list
         - <float> alpha: the weight for balancing the new and past information
     OUTPUT:
         - <matrix list> factors: the current factor matrix list
     """
+    [X, R] = update
     tic = time.time()
+    R_old = factors[0].shape[1]
+
+    if R is None or R == R_old:
+        pass
+    elif R > R_old:
+        factors = rank_increase(factors, R)
 
     for _ in range(iters):
         As = [factor.copy() for factor in factors]
@@ -492,20 +565,36 @@ def GOCPTE_fac_update(X, factors, alpha=1, iters=3):
         lhs, rhs = get_lhs_rhs_from_copy(As, factors, len(factors)-1)
         factors[-1] = optimize(lhs, rhs).T
 
-    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], axis=0)], time.time() - tic 
+    factors = factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], axis=0)]
+
+    if R < R_old:
+        factors, pof_score = rank_decrease(factors, R)
+        if pof_score < 0.95:
+            print ('ATTENTION! {:.4}% info lossed due to change of rank'.\
+                format(100.0 * (1-pof_score), R_old, R))
+
+    return factors, time.time() - tic
 
 
-def GOCPT_fac_update(X, factors, iters):
+def GOCPT_fac_update(update, factors, iters):
     """
     Our full version for online tensor factorization
     INPUT:
-        - <tensor> X: the input new tensor slice, (..., ..., ..., 1)
+        - [<tensor>, <int>] update: the input new tensor slice and new rank
         - <matrix list> factors: the current factor matrix list
         - <float> alpha: the weight for balancing the new and past information
     OUTPUT:
         - <matrix list> factors: the current factor matrix list
     """
     tic = time.time()
+    [X, R] = update
+    R_old = factors[0].shape[1]
+
+    if R == R_old:
+        pass
+    elif R > R_old:
+        factors = rank_increase(factors, R)
+
     # get the last dim
     lhs, rhs = get_lhs_rhs_from_tensor(X[...,factors[-1].shape[0]:], factors, len(factors)-1)
     aug_last_factor = optimize(lhs, rhs).T
@@ -515,6 +604,12 @@ def GOCPT_fac_update(X, factors, iters):
         for i in range(X.ndim):
             lhs, rhs = get_lhs_rhs_from_tensor(X, factors, i)
             factors[i] = optimize(lhs, rhs).T
+        
+    if R < R_old:
+        factors, pof_score = rank_decrease(factors, R)
+        if pof_score < 0.95:
+            print ('ATTENTION! {:.4}% info lossed due to change of rank'.\
+                format(100.0 * (1-pof_score), R_old, R))
 
     return factors, time.time() - tic 
 
@@ -605,13 +700,13 @@ def cpc_als_iteration(mask_X, factors, Omega):
     return factors, toc - tic
 
 
-def OnlineSGD_update(mask_X, mask, factors, lr, index=1, iters=3, reg=1e-5):
+def OnlineSGD_update(update, factors, lr, index=1, iters=3, reg=1e-5):
     """
     This method uses stochastic gradient descent to update each factor
     INPUT:
-        - <tensor> mask_X: this is the input tensor of size (I1, I2, ..., In)
+        - [<tensor>, <tensor>] (mask_X, mask): this is the input tensor of size (I1, I2, ..., In), \
+            and this is the tensor mask of size (I1, I2, ..., In)
         - <matrix list> factors: the initalized factors (A1, A2, ..., An)
-        - <tensor> mask: this is the tensor mask of size (I1, I2, ..., In)
         - <float> lr: the learning rate
         - <int> index: in which step? the index will become large with charging weight
         - <float> reg: L2 regularization coefficient
@@ -619,6 +714,7 @@ def OnlineSGD_update(mask_X, mask, factors, lr, index=1, iters=3, reg=1e-5):
         - <matrix list> factors: the optimized factors (A1, A2, ..., An)
     """
     tic = time.time()
+    [mask_X, mask] = update
     _, R = factors[0].shape
 
     for _ in range(iters):
@@ -641,14 +737,14 @@ def OnlineSGD_update(mask_X, mask, factors, lr, index=1, iters=3, reg=1e-5):
     return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], time.time() - tic
 
 
-def OLSTEC_update(mask_X, mask, factors, R_ls, S_ls, iters=3, mu=1e-9, Lambda=0.88):
+def OLSTEC_update(update, factors, R_ls, S_ls, iters=3, mu=1e-9, Lambda=0.88):
     """
     Kasai, Online Low-Rank Tensor Subspace Tracking from Incomplete Data by CP Decomposition \
         using Recursive Least Squares, ICASSP 2016
     INPUT:
-        - <tensor> mask_X: this is the input tensor of size (I1, I2, ..., In)
+        - [<tensor>, <tensor>] (mask_X, mask): this is the input tensor of size (I1, I2, ..., In), \
+            and this is the tensor mask of size (I1, I2, ..., In)
         - <matrix list> factors: the initalized factors (A1, A2, ..., An)
-        - <tensor> mask: this is the tensor mask of size (I1, I2, ..., In)
         - <matrix list> R_ls: aux variables for LHS
         - <matrix list> L_ls: aux variables for RHS
         - <float> mu, Lambda: two coefficient
@@ -658,7 +754,7 @@ def OLSTEC_update(mask_X, mask, factors, R_ls, S_ls, iters=3, mu=1e-9, Lambda=0.
         - <matrix list> L_ls: aux variables for RHS
     """
     tic = time.time()
-
+    [mask_X, mask] = update
     _, R = factors[0].shape
     eye = np.eye(R)
 
@@ -682,7 +778,9 @@ def OLSTEC_update(mask_X, mask, factors, R_ls, S_ls, iters=3, mu=1e-9, Lambda=0.
         R_ls, S_ls, time.time() - tic
 
 
-def GOCPTE_comp_update(mask_X, mask, factors, alpha=1, iters=3):
+# -------------- for generalized online tensor completion -----------
+
+def GOCPTE_general_comp_update(update, factors, alpha=1, iters=3):
     """
     Our efficient version for online tensor completion
     INPUT:
@@ -693,23 +791,111 @@ def GOCPTE_comp_update(mask_X, mask, factors, alpha=1, iters=3):
         - <matrix list> factors: the current factor matrix list
     """
     tic = time.time()
+    [mask_X, mask, kwargs] = update
+    if 'value_update' in kwargs:
+        vupdate_coords, vupdate_values = kwargs['value_update']
+    if 'miss_fill' in kwargs:
+        fill_coords, fill_values = kwargs['miss_fill']
+    R = kwargs['new_R']
+
+    # first solve rank change
+    R_old = factors[0].shape[1]
+    if R is None or R == R_old:
+        pass
+    elif R > R_old:
+        factors = rank_increase(factors, R)
+
+    # make a pseudo tensor and mask from value update and missing filling
+    if len(vupdate_values) + len(fill_values) > 0:
+        pseudo_mask_X = np.zeros([factor.shape[0] for factor in factors])
+        pseudo_mask = np.zeros_like(pseudo_mask_X)
+        pseudo_mask[vupdate_coords] = 1
+        pseudo_mask[fill_coords] = 1
+        pseudo_mask_X[vupdate_coords] = vupdate_values
+        pseudo_mask_X[fill_coords] = fill_values
 
     for _ in range(iters):
         As = [factor.copy() for factor in factors]
-        # get a new row in the last factor
+
+        # update the new dims of the last factors based on "mode growth"
         lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
         aug_last_factor = np.zeros_like(rhs.T)
         for k in range(aug_last_factor.shape[0]):
             aug_last_factor[k] = optimize(lhs[k], rhs[:, k]).T
 
+        # update the old dims of the last factors based on "missing filling" and "value update"
+        if len(vupdate_values) + len(fill_values) > 0:
+            lhs1, rhs1 = get_lhs_rhs_mask(pseudo_mask, pseudo_mask_X, factors, mask.ndim-1)
+            lhs2, rhs2 = get_lhs_rhs_from_copy(As, factors, mask.ndim-1)
+            for k in range(factors[-1].shape[0]):
+                factors[-1][k] = optimize(lhs1[k] + alpha * lhs2, rhs1[:, k] + alpha * rhs2[:, k]).T
+
+        # update other factors based on "missing filling" and "value update"
         for i in range(mask.ndim - 1):
             lhs1, rhs1 = get_lhs_rhs_mask(mask, mask_X, factors[:-1] + [aug_last_factor], i)
             lhs2, rhs2 = get_lhs_rhs_from_copy(As, factors, i)
+            if len(vupdate_values) + len(fill_values) > 0:
+                lhs3, rhs3 = get_lhs_rhs_mask(pseudo_mask, pseudo_mask_X, factors, i)
+                for k in range(factors[i].shape[0]):
+                    factors[i][k] = optimize(lhs1[k] + lhs3[k] + alpha * lhs2, \
+                            rhs1[:, k] + rhs3[:, k] + alpha * rhs2[:, k]).T
+            else:
+                for k in range(factors[i].shape[0]):
+                    factors[i][k] = optimize(lhs1[k] + alpha * lhs2, rhs1[:, k] + alpha * rhs2[:, k]).T
 
+    factors = factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)]
+    if R < R_old:
+        factors, pof_score = rank_decrease(factors, R)
+        if pof_score < 0.95:
+            print ('ATTENTION! {:.4}% info lossed due to change of rank'.\
+                format(100.0 * (1-pof_score), R_old, R))
+
+    return factors, time.time() - tic
+
+
+def GOCPT_general_comp_update(update, factors, alpha=1, iters=3):
+    """
+    Our full version for online tensor completion
+    INPUT:
+        - <tensor> X: the input new tensor slice, (..., ..., ..., 1)
+        - <matrix list> factors: the current factor matrix list
+        - <float> alpha: the weight for balancing the new and past information
+    OUTPUT:
+        - <matrix list> factors: the current factor matrix list
+    """
+    tic = time.time()
+    [mask_X, mask, R] = update 
+
+    # first solve rank change
+    R_old = factors[0].shape[1]
+    if R is None or R == R_old:
+        pass
+    elif R > R_old:
+        factors = rank_increase(factors, R)
+
+    tic = time.time()
+    new_dim = mask.shape[-1] - factors[-1].shape[0]
+
+    # get a new row in the last factor
+    lhs, rhs = get_lhs_rhs_mask(mask[...,-new_dim:], mask_X[...,-new_dim:], factors, mask.ndim-1)
+    aug_last_factor = np.zeros_like(rhs.T)
+    for k in range(aug_last_factor.shape[0]):
+        aug_last_factor[k] = optimize(lhs[k], rhs[:, k]).T
+    factors[-1] = np.concatenate([factors[-1], aug_last_factor], 0)
+
+    for _ in range(iters):
+        for i in range(mask.ndim):
+            lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, i)
             for k in range(factors[i].shape[0]):
-                factors[i][k] = optimize(lhs1[k] + alpha * lhs2, \
-                        rhs1[:, k] + alpha * rhs2[:, k]).T
-    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], time.time() - tic
+                factors[i][k] = optimize(lhs[k] , rhs[:, k]).T
+
+    if R < R_old:
+        factors, pof_score = rank_decrease(factors, R)
+        if pof_score < 0.95:
+            print ('ATTENTION! {:.4}% info lossed due to change of rank'.\
+                format(100.0 * (1-pof_score), R_old, R))
+
+    return factors, time.time() - tic
 
 
 def GOCPT_comp_update(mask_X, mask, factors, iters=3):
@@ -740,54 +926,33 @@ def GOCPT_comp_update(mask_X, mask, factors, iters=3):
     return factors, time.time() - tic
 
 
-# simulate the online setting
-def generate_simulation(X, prep=0.5, inc=1):
+
+# ------------- for generalized online tensor completion -----------------
+def GOCPTE_comp_update(mask_X, mask, factors, alpha=1, iters=3):
     """
-    Generate the simulation setting from a tensor with "time" as the last mode
+    Our efficient version for online tensor completion
     INPUT:
-        - <tensor> X: (I1, I2, ..., In)
-        - <int> prep: the percentage of preparation data
-        - <int> inc: how many new slices at the next step
+        - <tensor> X: the input new tensor slice, (..., ..., ..., 1)
+        - <matrix list> factors: the current factor matrix list
+        - <float> alpha: the weight for balancing the new and past information
     OUTPUT:
-        - <tensor> X_0: the prepration tensor
-        - <tensor list> X_inc_ls: a list of new tensors that appear later
+        - <matrix list> factors: the current factor matrix list
     """
-    if type(X) != type([1,2]):
-        In = X.shape[-1]
-        prep_threshold = round(In * prep)
-        X_0 = X[..., :prep_threshold]
-        X_inc_ls = []
-        for i in range(prep_threshold+1, In, inc):
-            X_inc_ls.append(X[..., i:i+inc])
+    tic = time.time()
 
-        message = """
-        ---------- new OTF setting ------------
-        base tensor size: {},
-        new tensor increment size: {},
-        tensor will be updated {} times.
-        """.format(X_0.shape, X_inc_ls[0].shape, len(X_inc_ls))
-        print (message)
+    for _ in range(iters):
+        As = [factor.copy() for factor in factors]
+        # get a new row in the last factor
+        lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
+        aug_last_factor = np.zeros_like(rhs.T)
+        for k in range(aug_last_factor.shape[0]):
+            aug_last_factor[k] = optimize(lhs[k], rhs[:, k]).T
 
-        return X_0, X_inc_ls
+        for i in range(mask.ndim - 1):
+            lhs1, rhs1 = get_lhs_rhs_mask(mask, mask_X, factors[:-1] + [aug_last_factor], i)
+            lhs2, rhs2 = get_lhs_rhs_from_copy(As, factors, i)
 
-    else:
-        X, mask = X
-        In = X.shape[-1]
-        prep_threshold = round(In * prep)
-        X_0 = X[..., :prep_threshold]
-        mask_0 = mask[..., :prep_threshold]
-        X_inc_ls, mask_inc_ls = [], []
-        for i in range(prep_threshold+1, In, inc):
-            X_inc_ls.append(X[..., i:i+inc])
-            mask_inc_ls.append(mask[..., i:i+inc])
-
-        message = """
-        ---------- new OTC setting ------------
-        base tensor size: {},
-        new tensor increment size: {},
-        tensor will be updated {} times.
-        """.format(X_0.shape, X_inc_ls[0].shape, len(X_inc_ls))
-        print (message)
-
-        return [X_0, mask_0], [X_inc_ls, mask_inc_ls]
-    
+            for k in range(factors[i].shape[0]):
+                factors[i][k] = optimize(lhs1[k] + alpha * lhs2, \
+                        rhs1[:, k] + alpha * rhs2[:, k]).T
+    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], time.time() - tic

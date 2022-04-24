@@ -1,9 +1,7 @@
 import numpy as np
-from regex import P
 from .utils import generate_random_factors, cpc_als_iteration, OnlineSGD_update, OLSTEC_update, \
     get_lhs_rhs_mask_weighted, GOCPTE_comp_update, GOCPT_comp_update
 from .metrics import PoF
-from numpy import linalg as la
 
 def cpc(Omega, mask_X, R, iters=None, verbose=False):
     """
@@ -17,7 +15,7 @@ def cpc(Omega, mask_X, R, iters=None, verbose=False):
         - <list> pof_score_list: contains the PoF metric during iterations 
     """
      
-    factors = generate_random_factors(Omega, R)
+    factors = generate_random_factors(Omega, R, dist='normal')
     pof_score_list = []
 
     if iters is not None:
@@ -95,13 +93,13 @@ class OnlineSGD(BASE_ONLINE_TENSOR_COMP):
         super(OnlineSGD, self).__init__(base, R, iters)
         self.cal_aux()
     
-    def update(self, increment, lr=1e-10, index=1, iters=3, verbose=False):
+    def update(self, increment, lr=1e-10, index=1, iters=3, verbose=True):
         mask_X, mask = increment
 
         # for calculating pof, we store X and the mask
         self.collect_X_and_mask(mask_X, mask)
 
-        self.factors, run_time = OnlineSGD_update(mask_X, mask, self.factors, lr, index, iters)
+        self.factors, run_time = OnlineSGD_update([mask_X, mask], self.factors, lr, index, iters)
         pof_score = PoF(self.X, self.factors, self.mask)
         if verbose:
             print ("{}-th update, PoF: {}, run_time: {}s".\
@@ -121,13 +119,13 @@ class OLSTEC(BASE_ONLINE_TENSOR_COMP):
         self.S = []
         self.cal_aux()
     
-    def update(self, increment, iters=3, verbose=False):
+    def update(self, increment, iters=3, verbose=True):
         mask_X, mask = increment
 
         # for calculating pof, we store X and the mask
         self.collect_X_and_mask(mask_X, mask)
 
-        self.factors, self.R, self.S, run_time = OLSTEC_update(mask_X, mask, self.factors, self.R, \
+        self.factors, self.R, self.S, run_time = OLSTEC_update([mask_X, mask], self.factors, self.R, \
             self.S, iters, mu=1e-9, Lambda=0.88)
         pof_score = PoF(self.X, self.factors, self.mask)
         if verbose:
@@ -145,49 +143,3 @@ class OLSTEC(BASE_ONLINE_TENSOR_COMP):
         
         print ('aux variables prepared!')
         print ()
-
-
-class GOCPTE(BASE_ONLINE_TENSOR_COMP):
-    """
-    Our efficient version for online tensor completion 
-    """
-    def __init__(self, base, R, iters=50):
-        super(GOCPTE, self).__init__(base, R, iters)
-        self.cal_aux()
-    
-    def update(self, increment, alpha=1, iters=3, verbose=False):
-        mask_X, mask = increment
-
-        # for calculating pof, we store X and the mask
-        self.collect_X_and_mask(mask_X, mask)
-
-        self.factors, run_time = GOCPTE_comp_update(mask_X, mask, self.factors, alpha, iters)
-        pof_score = PoF(self.X, self.factors, self.mask)
-        if verbose:
-            print ("{}-th update, PoF: {}, run_time: {}s".\
-                            format(self.counter, pof_score, run_time))
-        self.pof_update_list.append(pof_score)
-        self.counter += 1
-
-
-class GOCPT(BASE_ONLINE_TENSOR_COMP):
-    """
-    Our full version for online tensor completion 
-    """
-    def __init__(self, base, R, iters=50):
-        super(GOCPT, self).__init__(base, R, iters)
-        self.cal_aux()
-    
-    def update(self, increment, iters=3, verbose=False):
-        mask_X, mask = increment
-
-        # for calculating pof, we store X and the mask
-        self.collect_X_and_mask(mask_X, mask)
-
-        self.factors, run_time = GOCPT_comp_update(self.X, self.mask, self.factors, iters)
-        pof_score = PoF(self.X, self.factors, self.mask)
-        if verbose:
-            print ("{}-th update, PoF: {}, run_time: {}s".\
-                            format(self.counter, pof_score, run_time))
-        self.pof_update_list.append(pof_score)
-        self.counter += 1
