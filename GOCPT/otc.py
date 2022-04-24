@@ -1,6 +1,6 @@
 import numpy as np
 from .utils import generate_random_factors, cpc_als_iteration, OnlineSGD_update, OLSTEC_update, \
-    get_lhs_rhs_mask_weighted, GOCPTE_comp_update, GOCPT_comp_update
+    get_lhs_rhs_mask_weighted
 from .metrics import PoF
 
 def cpc(Omega, mask_X, R, iters=None, verbose=False):

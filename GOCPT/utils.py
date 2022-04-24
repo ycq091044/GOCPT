@@ -724,11 +724,10 @@ def OnlineSGD_update(update, factors, lr, index=1, iters=3, reg=1e-5):
         for k in range(aug_last_factor.shape[0]):
             aug_last_factor[k] = optimize(lhs[k], rhs[:, k]).T
 
-        # update A1, A2, A3
         rec_X = rec_from_factors(factors[:-1] + [aug_last_factor])
         grad = []
         for i in range(mask.ndim - 1):
-            lhs, rhs = get_lhs_rhs_from_tensor(mask_X - mask * rec_X, factors, i)
+            lhs, rhs = get_lhs_rhs_from_tensor(mask_X - mask * rec_X, factors[:-1] + [aug_last_factor], i)
             grad.append(optimize(lhs, rhs).T)
             
         for i in range(mask.ndim - 1):
@@ -896,63 +895,3 @@ def GOCPT_general_comp_update(update, factors, alpha=1, iters=3):
                 format(100.0 * (1-pof_score), R_old, R))
 
     return factors, time.time() - tic
-
-
-def GOCPT_comp_update(mask_X, mask, factors, iters=3):
-    """
-    Our full version for online tensor completion
-    INPUT:
-        - <tensor> X: the input new tensor slice, (..., ..., ..., 1)
-        - <matrix list> factors: the current factor matrix list
-        - <float> alpha: the weight for balancing the new and past information
-    OUTPUT:
-        - <matrix list> factors: the current factor matrix list
-    """
-    tic = time.time()
-    new_dim = mask.shape[-1] - factors[-1].shape[0]
-
-    # get a new row in the last factor
-    lhs, rhs = get_lhs_rhs_mask(mask[...,-new_dim:], mask_X[...,-new_dim:], factors, mask.ndim-1)
-    aug_last_factor = np.zeros_like(rhs.T)
-    for k in range(aug_last_factor.shape[0]):
-        aug_last_factor[k] = optimize(lhs[k], rhs[:, k]).T
-    factors[-1] = np.concatenate([factors[-1], aug_last_factor], 0)
-
-    for _ in range(iters):
-        for i in range(mask.ndim):
-            lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, i)
-            for k in range(factors[i].shape[0]):
-                factors[i][k] = optimize(lhs[k] , rhs[:, k]).T
-    return factors, time.time() - tic
-
-
-
-# ------------- for generalized online tensor completion -----------------
-def GOCPTE_comp_update(mask_X, mask, factors, alpha=1, iters=3):
-    """
-    Our efficient version for online tensor completion
-    INPUT:
-        - <tensor> X: the input new tensor slice, (..., ..., ..., 1)
-        - <matrix list> factors: the current factor matrix list
-        - <float> alpha: the weight for balancing the new and past information
-    OUTPUT:
-        - <matrix list> factors: the current factor matrix list
-    """
-    tic = time.time()
-
-    for _ in range(iters):
-        As = [factor.copy() for factor in factors]
-        # get a new row in the last factor
-        lhs, rhs = get_lhs_rhs_mask(mask, mask_X, factors, mask.ndim-1)
-        aug_last_factor = np.zeros_like(rhs.T)
-        for k in range(aug_last_factor.shape[0]):
-            aug_last_factor[k] = optimize(lhs[k], rhs[:, k]).T
-
-        for i in range(mask.ndim - 1):
-            lhs1, rhs1 = get_lhs_rhs_mask(mask, mask_X, factors[:-1] + [aug_last_factor], i)
-            lhs2, rhs2 = get_lhs_rhs_from_copy(As, factors, i)
-
-            for k in range(factors[i].shape[0]):
-                factors[i][k] = optimize(lhs1[k] + alpha * lhs2, \
-                        rhs1[:, k] + alpha * rhs2[:, k]).T
-    return factors[:-1] + [np.concatenate([factors[-1], aug_last_factor], 0)], time.time() - tic

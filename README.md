@@ -1,5 +1,7 @@
-# GOCPT
-Generalized Online Canonical Polyadic Tensor Factorization and Completion (GOCPT) Package
+# GOCPT: Generalized Online CP Tensor Learning
+Real-world tensor (multi-dimensional data) can evolve in various ways (as shown below). We provide this ``GOCPT`` package to handle the most general online Canonical Polyadic (CP) tensor factorization and completion problem.
+
+<img src="./illustration/generalized_online_tensor_evolution.png" width="620">
 
 - This package ``GOCPT`` can **unify most of the existing tensor factorization and completion scenarios** and can support the following evolving patterns in the online setting:
     - **mode growth** along one or more dimensions
@@ -9,6 +11,7 @@ Generalized Online Canonical Polyadic Tensor Factorization and Completion (GOCPT
 - This package provides two model for handling generalized online tensor factorization or completion problems. These two models have **comparable or better accuracy/fitness/complexity than previous baselines**. 
     - ``GOCPT``: need to preserve all previous data and provides more accurate fit
     - ``GOCPTE (economy version)``: no previous data is needed and can provide fast speed
+
 ---
 ## 1. Package Installation
 ```bash
@@ -18,7 +21,7 @@ To look up for help, directly type "GOCPT" in the cmd and the help message will 
 ```bash
 $ GOCPT
 ```
-We provide the following modules with a tutorial here
+We provide the following modules:
 - ``GOCPT.datasets``: external real tensor loader, synthetic tensor generation
 - ``GOCPT.otf``: baseline models for common online tensor factorization
 - ``GOCPT.otc``: baseline models for common online tensor completion
@@ -37,26 +40,25 @@ We provide the following two models for the GOTF setting:
 
 and the following models for the common OTF setting:
 - Support arbitrary order tensors: ``otf.OnlineCPD``, ``otf.CPStream``, ``otf.MAST``
-- Support only 3-order tensors: ``otf.SDT``, ``otf.RLST``
+- Support only 3-order tensors and 1 new slice at each step: ``otf.SDT``, ``otf.RLST``
 ### A Quick Example
 ```python
 from GOCPT import datasets, simulation, otf, gotf
-# (Data Loader) load Columbia FACE 3D data tensor
+
+# load Columbia FACE 3D tensor
 X = datasets.FACE_3D()
 
-# (Preparation) simulate one mode growth (typically the last mode)
+# simulate one mode growth (typically the last mode)
 # use 30% as preparation and increase 3 slices at each step
 [X_0, X_inc_ls] = simulation.growth_1d(X, prep=0.3, inc=3)
 
-# (Initialize) initialize the model
+# initialize the model
 model = gotf.GOCPTE(X_0, R=5, iters=100)
-baseline = otf.MAST(X_0, R=5, iters=100)
 
-# (Online Update) update model with new slices, new_R can change during for-loop
+# update model with new slices, new_R can change during for-loop
 for increments in X_inc_ls:
     new_R = np.random.choice([5,6,7,8])
     model.update(increments, new_R=new_R)
-    # baseline.update(increments) # update baseline
 ```
 ## 3. Generalized Online Tensor Completion (GOTC)
 The GOTC setting is a generalization of online tensor completion (OTC) setting. Here, multiple evolution patterns can appear simultaneously:
@@ -73,32 +75,32 @@ and the following models for the OTC setting: ``otc.OLSTEC``, ``otc.OnlineSGD``
 ### A Quick Example
 ```python
 from GOCPT import datasets, simulation, otc, gotc
-# (Data Loader) load Columbia FACE 3D data tensor
+
+# load synthetic data
 [masked_X, mask] = datasets.syn_data(R=5, size=(5, 10, 15, 100), dist='unif', sparsity=0.95)
 
-# (Preparation) simulate one mode growth (typically the last mode)
+# simulate one mode growth (typically the last mode)
 # use 30% as preparation and increase 3 slices at each step
 [[X_0, mask_0], [X_inc_ls, mask_inc_ls]] = simulation.growth_1d([masked_X, mask], prep=0.3, inc=3)
 
-# (Initialize) initialize the model
+# initialize the model
 model = gotc.GOCPTE([X_0, mask_0], R=5, iters=100)
-baseline = otc.OLSTEC([X_0, mask_0], R=5, iters=100)
 
-# (Online Update) update model with new slices, new_R can change during for-loop
+# update model with new slices, new_R can change during for-loop
 for increments in zip(X_inc_ls, mask_inc_ls):
-    # (Simulation) simulate value update， missing filling，change of rank
+    # simulate value update， missing filling，change of rank
     new_value_update = simulation.value_update(model.X, model.mask, percent=10, amp=0.05)
-    new_missing_fill = simulation.missing_fill(model.X, model.mask, percent=10, factors=model.factors)
+    new_missing_fill = simulation.missing_fill(model.X, model.mask, percent=10, \
+        factors=model.factors)
     new_R = np.random.choice([5,6,7,8])
-    model.update(increments, new_R=new_R, value_update=new_value_update, miss_fill=new_missing_fill)
-    # baseline.update(increments) # update baseline
+    model.update(increments, new_R=new_R, value_update=new_value_update, \
+        miss_fill=new_missing_fill)
 ```
 
 ## 4. How to use the modules?
 ### 4.1. Data Loader ``GOCPT.datasets``
 - ``datasets.GCSS``
 - ``datasets.FACE_3D``
-- ``datasets.JHU_COVID``
 
 The tensor data is formatted as ``np.ndarry`` type (the current version is compatible with numpy only, we are building torch version to support CUDA). They can be loaded from external data or can be synthetically generated from our scripts with various distribution.
 ```python
@@ -170,8 +172,9 @@ INPUT:
     - <tensor> X: the masked tensor
     - <tensor> mask: the mask itself
     - <int> or <float>: percentage of changed elements or how many elements to fill
-    - <matrix list> factors: it is not necessary. However, using factors during the simulation can \
-        provide a smoothed missing filling. If factors is None, then we random sample existing elements
+    - <matrix list> factors: it is not necessary. However, using factors during the \
+        simulation can provide a smoothed missing filling. If factors is None, then \
+        we random sample existing elements
 OUTPUT:
     - <list> coords: coordinate list of the changed elements
     - <list> values: new value list of the changed elements
@@ -202,7 +205,7 @@ INPUT:
 model.update(increments, new_R=new_R)
 baseline.update(increments)
 ```
-### 4.4.Completion Model Config ``GOCPT.gotc``, ``GOCPT.otc``
+### 4.4. Completion Model Config ``GOCPT.gotc``, ``GOCPT.otc``
 All models in this package will be fed on the initial tensor and the mask and store an intial list of factors. Then, during the evolution of the tensor, the model (a list of low-rank factors) is updated based on the all the accessible new information (from up to four different evolutions). For calculating the reconstruction error (percentage of fitness, PoF), we will still store all the information in the model class, though they will only be used in ``gotc.GOCPT``.
 - the stats of initialization and each updates will be summarized after optimization
 ```python
@@ -237,3 +240,14 @@ baseline.update([X_increments, mask_increments])
 - We plan to refactorize the code into torch version and support ``cuda`` to accelerate our computation
 - We will consider more tensor evolving patterns to extend the coverage of our package.
 - As a long-term plan, we plan to support sparse tensor implementations for subsequent research.
+
+<!-- ### Citation
+```bibtex
+@inproceedings{yang2021safedrug,
+    title = {GOCPT: Generalized Online Canonical Polyadic Tensor Factorization and Completion},
+    author = {Yang, Chaoqi and Qian, Cheng and Sun, Jimeng},
+    booktitle = {Proceedings of the Thirtieth International Joint Conference on
+               Artificial Intelligence, {IJCAI} 2022},
+    year = {2022}
+}
+``` -->

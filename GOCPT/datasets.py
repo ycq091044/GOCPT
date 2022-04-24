@@ -11,9 +11,9 @@ def GCSS():
     gcss = pickle.load(request.urlopen('https://drive.google.com/uc?id=1X9-vbZUMm_VhsUgs8uKgsCQ5MbB7QYuX'))
     return gcss
 
-def JHU_COVID():
-    jhu_covid = pickle.load(request.urlopen('https://drive.google.com/uc?id=1noy2iDLGB1xF8NNp4XcsMn6x4KXbjM_9'))
-    return jhu_covid
+# def JHU_COVID():
+#     jhu_covid = pickle.load(request.urlopen('https://drive.google.com/uc?id=1noy2iDLGB1xF8NNp4XcsMn6x4KXbjM_9'))
+#     return jhu_covid
 
 def syn_data(R, size, dist='unif', sparsity=None):
     """

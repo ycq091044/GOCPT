@@ -27,7 +27,7 @@ class GOCPTE(BASE_ONLINE_TENSOR_FAC):
         else:
             pass
         
-        self.factors, run_time = GOCPTE_fac_update([X, self.R], alpha, self.factors, iters)
+        self.factors, run_time = GOCPTE_fac_update([X, self.R], self.factors, alpha, iters)
         pof_score = PoF(self.X, self.factors)
         if verbose:
             print ("{}-th update Success! PoF: {:.4}, run_time: {:.4}s".\

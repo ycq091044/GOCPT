@@ -1,7 +1,7 @@
 import numpy as np
 from .utils import cpd_als_iteration, OnlineCPD_update, get_lhs_rhs_from_tensor, \
-        MAST_update, BiSVD, SDT_update, RLST_update, CPStream_update, GOCPTE_fac_update, \
-        GOCPT_fac_update, generate_random_factors, khatri_rao
+        MAST_update, BiSVD, SDT_update, RLST_update, CPStream_update, \
+        generate_random_factors, khatri_rao
 from .metrics import PoF
 from numpy import linalg as la
 
