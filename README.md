@@ -243,13 +243,12 @@ baseline.update([X_increments, mask_increments])
 - We will consider more tensor evolving patterns to extend the coverage of our package.
 - As a long-term plan, we plan to support sparse tensor implementations for subsequent research.
 
-<!-- ### Citation
+### Citation
 ```bibtex
-@inproceedings{yang2021safedrug,
-    title = {GOCPT: Generalized Online Canonical Polyadic Tensor Factorization and Completion},
-    author = {Yang, Chaoqi and Qian, Cheng and Sun, Jimeng},
-    booktitle = {Proceedings of the Thirtieth International Joint Conference on
-               Artificial Intelligence, {IJCAI} 2022},
-    year = {2022}
+@article{yang2022gocpt,
+  title={GOCPT: Generalized Online Canonical Polyadic Tensor Factorization and Completion},
+  author={Yang, Chaoqi and Qian, Cheng and Sun, Jimeng},
+  journal={arXiv preprint arXiv:2205.03749},
+  year={2022}
 }
-``` -->
+```
